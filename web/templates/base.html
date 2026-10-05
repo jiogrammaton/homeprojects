@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Home Projects{% endblock %} · Home Projects</title>
+  {% load static %}
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{% static 'style.css' %}?v=41">
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=41">
+</head>
+<body data-view="{{ view }}" data-tab="{{ tab }}" data-user="{{ request.user.get_username }}">
+<header class="topbar">
+  <a class="brand" href="{% url 'home' %}" aria-label="Home Projects – Home">
+    <span class="logo" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/><path d="M10 20v-5h4v5"/></svg>
+    </span>
+    <span class="brand-name">Home Projects</span>
+  </a>
+
+  <nav class="tabs" aria-label="Sections">
+    <a class="tab{% if view == 'home' %} on{% endif %}" href="{% url 'home' %}"{% if view == 'home' %} aria-current="page"{% endif %}>
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 11h8M11 3v18M11 15h10"/></svg>Home</a>
+    <a class="tab{% if view == 'board' %} on{% endif %}" href="{% url 'board' %}"{% if view == 'board' %} aria-current="page"{% endif %}>
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg>Board</a>
+    <a class="tab{% if view == 'cal' %} on{% endif %}" href="{% url 'calendar' %}"{% if view == 'cal' %} aria-current="page"{% endif %}>
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Calendar</a>
+    <a class="tab{% if view == 'stats' %} on{% endif %}" href="{% url 'stats' %}"{% if view == 'stats' %} aria-current="page"{% endif %}>
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Stats</a>
+    <a class="tab{% if view == 'settings' %} on{% endif %}" href="{% url 'settings' %}"{% if view == 'settings' %} aria-current="page"{% endif %}>
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</a>
+  </nav>
+
+  <div class="tools">
+    <label class="search" title="Filter by title, label or project (press /)">
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Filter…" aria-label="Filter tasks" oninput="draw()">
+      <kbd>/</kbd>
+    </label>
+    <button type="button" class="ghost" onclick="f.click()" title="Import tasks from a CSV file">
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Import</span></button>
+    <button type="button" class="p new" onclick="edit()">
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New</button>
+    <input type="file" id="f" accept=".csv" hidden onchange="imp()">
+    <form method="post" action="{% url 'logout' %}" class="signout">
+      {% csrf_token %}
+      <button type="submit" class="ghost icon" title="Sign out ({{ request.user.get_username }})" aria-label="Sign out">
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+    </form>
+  </div>
+</header>
+<main id="m">{% block content %}{% endblock %}</main>
+
+<dialog id="d">
+  <form method="dialog" onsubmit="return false">
+    <h2 id="dt">New task</h2>
+
+    <!-- What am I creating? (hidden when editing an existing task) -->
+    <div id="modewrap">
+      <label>What are you creating?</label>
+      <div class="seg">
+        <button type="button" id="mt" class="on" onclick="setMode('task');focusName()">✅ Task</button>
+        <button type="button" id="mp" onclick="setMode('project');focusName()">📁 Project</button>
+      </div>
+    </div>
+
+    <!-- PROJECT form -->
+    <div id="pf" hidden>
+      <label>Project name</label>
+      <input id="pn" placeholder="e.g. Kitchen remodel, Backyard, HVAC">
+      <label>Project priority</label>
+      <select id="pp"></select>
+      <label>Room <span class="help" id="help-pr" tabindex="-1" role="img" aria-label="Where this project shows up on the Home map. Projects that aren't tied to one room belong to the whole house." data-tip="Where this project shows up on the Home map. Projects that aren't tied to one room belong to the whole house.">?</span></label>
+      <select id="pr" aria-describedby="help-pr"></select>
+      <label>Project color</label>
+      <input type="color" id="pc">
+    </div>
+
+    <!-- TASK form -->
+    <div id="tf">
+      <label>Project</label>
+      <select id="p" onchange="fillTaskRoom()"></select>
+      <label>Room <span class="help" id="help-tr" tabindex="-1" role="img" aria-label="Where this task counts on the Home map. Leave it on “Same as project” unless this task happens somewhere else." data-tip="Where this task counts on the Home map. Leave it on “Same as project” unless this task happens somewhere else.">?</span></label>
+      <select id="tr" aria-describedby="help-tr"></select>
+      <label>Title</label>
+      <input id="t">
+      <label>Task priority</label>
+      <select id="tp"></select>
+      <label>Status</label>
+      <select id="s">
+        <option value="backlog">ToDo</option>
+        <option value="doing">Doing</option>
+        <option value="done">Done</option>
+      </select>
+      <label>Labels <span class="help" id="help-lb" tabindex="-1" role="img" aria-label="Click a label to add or remove it. A frequency label (like Quarterly or Weekly) makes the task repeat, one per task. Create labels and set how often they repeat in Settings › Labels." data-tip="Click a label to add or remove it. A frequency label (like Quarterly or Weekly) makes the task repeat, one per task. Create labels and set how often they repeat in Settings › Labels.">?</span></label>
+      <div id="lb" role="group" aria-label="Labels" aria-describedby="help-lb"></div>
+
+      <label>Due date</label>
+      <div class="dpw">
+        <input id="u" readonly onclick="toggleDP()" placeholder="Pick a date" aria-haspopup="dialog" title="Press Enter to open the calendar">
+        <div id="dp" class="dp" hidden></div>
+      </div>
+
+      <label>Tutorial URL</label>
+      <input id="l">
+      <label>Notes / subtasks <span class="help" id="help-n" tabindex="-1" role="img" aria-label="Use &quot;- [ ] step&quot; and &quot;- [x] step&quot; lines to make a checklist. Cards show how many steps are done." data-tip="Use &quot;- [ ] step&quot; and &quot;- [x] step&quot; lines to make a checklist. Cards show how many steps are done.">?</span></label>
+      <textarea id="n" rows="4" aria-describedby="help-n"></textarea>
+    </div>
+
+    <p id="qa-msg" class="qa-msg" role="status" aria-live="polite" hidden></p>
+    <p class="formbtns">
+      <button type="button" id="x" onclick="rm()">Delete</button>
+      <button type="button" onclick="d.close()">Cancel</button>
+      <button type="button" id="addmore" onclick="saveAndNew()" title="Save, then start the next one with the same choices">Save &amp; add another</button>
+      <button type="button" class="p" onclick="sv()">Save</button>
+    </p>
+  </form>
+</dialog>
+<!-- Branded confirmation / notice dialog (replaces browser confirm() and alert()) -->
+<dialog id="cd">
+  <div class="cdbox">
+    <div class="cdicon" id="cd-i">⚠️</div>
+    <h3 id="cd-t"></h3>
+    <p id="cd-m"></p>
+    <div class="cdbtns">
+      <button type="button" id="cd-no">Cancel</button>
+      <button type="button" id="cd-ok" class="red">Delete</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Import wizard: review a CSV, fix what's missing (one row or many at once), then import -->
+<dialog id="iw" class="wiz" aria-labelledby="iw-title"><div id="iw-body"></div></dialog>
+
+{{ default_map|json_script:"map-default" }}
+<script src="{% static 'app.js' %}?v=41"></script>
+</body>
+</html>

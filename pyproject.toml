@@ -1,0 +1,22 @@
+# Tool settings only: Home Projects is a Django site, not an installable package (see requirements*.txt).
+[project]
+name = "home-projects"
+version = "1.0.0"
+description = "Home maintenance and project tracking: house map, kanban board, recurring tasks, calendar, stats."
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["venv", "web/migrations"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = ["E731"]   # short lambdas assigned to names are used on purpose for tiny local helpers
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "web"]
+
+[tool.ruff.format]
+quote-style = "preserve"    # the code mixes 'single' and "double" quotes by meaning; don't churn them

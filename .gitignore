@@ -1,0 +1,38 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# ---- Secrets and per-machine settings (never commit) ----
+.env
+.secret_key
+
+# ---- Live data (your real tasks and sign-in accounts) ----
+db.sqlite3
+db.sqlite3-journal
+db.sqlite3-wal
+db.sqlite3-shm
+*.sqlite3
+backups/
+# Data exports downloaded from Settings > Miscellaneous
+home-projects-backup-*.json
+
+# ---- Created at runtime ----
+logs/
+.cache/
+staticfiles/
+
+# ---- Editors and OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Personal (your own server details and scratch notes) ----
+.claude/settings.local.json
+CLAUDE.local.md
+wishlist.md

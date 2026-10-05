@@ -1,0 +1,13 @@
+# Files that stay on your computer when copying the app to the server (rsync --exclude-from).
+# The server builds its own venv, and keeps its own secret key, settings and logs.
+.git/
+venv/
+.cache/
+logs/
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+.env
+.secret_key
+# Data exports downloaded from Settings > Miscellaneous (your data is already in db.sqlite3)
+home-projects-backup-*.json

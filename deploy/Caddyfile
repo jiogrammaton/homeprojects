@@ -1,0 +1,13 @@
+# Optional HTTPS in front of the app, using Caddy (https://caddyserver.com).
+# "tls internal" makes Caddy its own certificate authority: browsers warn until you
+# install Caddy's root certificate on each device (see DEPLOY.md, step 7).
+#
+# With this in place, change gunicorn's --bind to 127.0.0.1:8000 and set in .env:
+#   DJANGO_HTTPS=1
+#   DJANGO_CSRF_TRUSTED_ORIGINS=https://homeserver.local
+#   DJANGO_TRUST_X_FORWARDED_FOR=1
+
+homeserver.local {
+	tls internal
+	reverse_proxy 127.0.0.1:8000
+}

@@ -1,0 +1,20 @@
+# Runs on the COMPUTER THAT HOSTS THE VM (not inside the VM).
+# Passes requests from phones and other devices on your home network to the app in the VM,
+# for when the VM is on virt-manager's private NAT network (192.168.122.x), e.g. because
+# the host is on Wi-Fi and can't bridge.
+#
+# Devices then open:  http://<this-computer's-IP>:8080/
+#
+# Install on the host:
+#   sudo dnf install caddy
+#   sudo cp deploy/Caddyfile.vm-host /etc/caddy/Caddyfile     (then edit the VM address below)
+#   sudo setsebool -P httpd_can_network_connect 1             (lets Caddy connect to the VM under SELinux)
+#   sudo systemctl enable --now caddy
+#
+# Port 8080 (not 8000) so it doesn't clash with `manage.py runserver` on this computer.
+# Caddy adds X-Forwarded-For, so the app sees each device's real IP (for sign-in lockouts and
+# the audit log) once the VM's .env has DJANGO_TRUST_X_FORWARDED_FOR=1.
+
+http://:8080 {
+	reverse_proxy 192.168.122.10:8000
+}
