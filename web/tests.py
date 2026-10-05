@@ -237,6 +237,24 @@ class ImportTests(AuthedTestCase):
         self.upload(head + 'Filter,HVAC,Quarterly,3,Any,,,2026-01-15,\n')
         self.assertEqual(Task.objects.get().due, date(2026, 4, 15))
 
+    def test_no_date_is_due_one_repeat_out(self):
+        head = 'Task,Area,Frequency,Interval (Months),Timing\n'
+        self.upload(
+            head + 'Filter,HVAC,Monthly,1,Any\nDrain,Plumbing,Quarterly,3,Any\nRoof,Exterior,Annually,12,Any\n'
+            'Trash,Kitchen,Weekly,,Any\nPaint,Exterior,,,Any\n'
+        )
+        today = date.today()
+        self.assertEqual(
+            dict(Task.objects.values_list('title', 'due')),
+            {
+                'Filter': today + relativedelta(months=1),
+                'Drain': today + relativedelta(months=3),
+                'Roof': today + relativedelta(years=1),
+                'Trash': today + timedelta(weeks=1),
+                'Paint': today,  # one-off
+            },
+        )
+
     def test_frequency_becomes_a_label(self):
         head = 'Task,Area,Frequency,Interval (Months),Timing\n'
         self.upload(head + 'Filter,HVAC,Quarterly,3,Spring\nTrash,Kitchen,Weekly,,Any\nRoof,Exterior,,48,Any\n')
@@ -383,7 +401,7 @@ class ImportWizardTests(AuthedTestCase):
         self.assertEqual(Task.objects.count(), 0)
         levels = lambda row: {(i['field'], i['level']) for i in row['issues']}
         self.assertIn(('title', 'error'), levels(rows[0]))
-        self.assertEqual(levels(rows[1]), {('project', 'warn'), ('room', 'warn'), ('due', 'warn')})
+        self.assertEqual(levels(rows[1]), {('project', 'warn'), ('room', 'warn')})  # repeats, so due 3 months out
         self.assertEqual((rows[1]['interval'], rows[1]['room']), (3, ''))
         self.assertEqual((rows[2]['room'], rows[2]['interval'], rows[2]['due']), ('basement', 24, '2027-03-15'))
         self.assertEqual(rows[2]['issues'], [])

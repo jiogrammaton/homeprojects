@@ -476,14 +476,15 @@ def parse_date(text):
     return None
 
 
-def first_due(timing):
-    """The next 1st of the season's month named in `timing` (e.g. "Spring" -> next April 1), else today."""
+def first_due(timing, interval=0, unit='m'):
+    """Due date for an imported row with no date: the next 1st of a season's month named in `timing` (e.g.
+    "Spring and Fall" -> whichever of Apr 1 / Oct 1 comes first), else one repeat from today (a yearly task is due a
+    year from now), else today for a one-off."""
     today = date.today()
-    month = next((m for season, m in SEASON_MONTHS.items() if season in timing), 0)
-    if not month:
-        return today
-    d = date(today.year, month, 1)
-    return d if d >= today else date(today.year + 1, month, 1)
+    months = [m for season, m in SEASON_MONTHS.items() if season in timing]
+    if months:
+        return min(date(today.year + (date(today.year, m, 1) < today), m, 1) for m in months)
+    return add_interval(today, interval, unit) if interval else today
 
 
 def _parse_row(val, line, rooms):
@@ -526,8 +527,8 @@ def _parse_row(val, line, rooms):
     if not due and last and interval:
         due = add_interval(last, interval, unit)
     if not due:
-        due = first_due(timing)
-        if not any(season in timing for season in SEASON_MONTHS):
+        due = first_due(timing, interval, unit)
+        if not interval and not any(season in timing for season in SEASON_MONTHS):
             issue('due', 'warn', 'No due date, so it’s due today')
 
     # a repeating task carries its frequency label (the Frequency text, else the label for its interval)

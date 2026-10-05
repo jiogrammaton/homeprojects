@@ -25,7 +25,7 @@ Every folder has its own `CLAUDE.md` with notes on each file in it. Read the one
 ```bash
 source venv/bin/activate
 python manage.py runserver            # http://127.0.0.1:8000/ (sign-in required)
-python manage.py test web             # 38 tests, all should pass
+python manage.py test web             # 39 tests, all should pass
 python manage.py check --deploy       # only the 4 HTTPS warnings are expected on plain HTTP
 python manage.py makemigrations tasks && python manage.py migrate   # after model changes (app LABEL is still 'tasks')
 ruff check . && ruff format --check . # lint + format check (pyproject.toml); `ruff format .` to fix

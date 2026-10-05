@@ -76,10 +76,10 @@ Column headers (the order doesn't matter, and only **Task** is required):
 | `Room` | Optional. The task uses its project's room. Accepts the names of rooms on your map (for example `Kitchen`), plus `Yard` and `Whole house`. |
 | `Frequency` | Becomes the task's frequency label (e.g. `Quarterly`, `Weekly`). If `Interval (Months)` is also blank and the frequency can't be read, the task is one-off. |
 | `Interval (Months)` | Worked out from `Frequency` when possible (`Quarterly` = 3, `Every 2 years` = 24). |
-| `Timing` | `Spring` / `Summer` / `Fall` set the first due date to Apr 1 / Jun 1 / Oct 1 when there's no date. |
+| `Timing` | `Spring` / `Summer` / `Fall` set the first due date to the next Apr 1 / Jun 1 / Oct 1 when there's no date (`Spring and Fall` uses whichever comes first). |
 | `Notes`, `Tutorial URL` | Left empty. |
 | `Last Done` | If there's no `Next Due`, the first due date is `Last Done` + the interval. |
-| `Next Due` | Due today unless `Last Done` or `Timing` gives a date. `YYYY-MM-DD` and `M/D/YYYY` both work. |
+| `Next Due` | If blank (and `Last Done` and `Timing` don't give a date), a repeating task is first due one repeat from today: monthly a month out, quarterly 3 months out, yearly a year out. A one-off is due today. `YYYY-MM-DD` and `M/D/YYYY` both work. |
 
 ## Pages
 
