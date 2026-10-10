@@ -14,7 +14,7 @@ Django templates, found by name through `APP_DIRS` (no namespace folder: `render
 
 ## Rules
 
-- **Cache busting:** `base.html` and `auth_base.html` load `style.css?v=N`, `app.js?v=N`, `favicon.svg?v=N` (currently **54**). Bump N in both files on every CSS/JS change (`sed -i 's/?v=54/?v=55/g' web/templates/*.html`).
+- **Cache busting:** `base.html` and `auth_base.html` load `style.css?v=N`, `app.js?v=N`, `favicon.svg?v=N`, `apple-touch-icon.png?v=N` (currently **59**). Bump N in both files on every CSS/JS change (`sed -i 's/?v=59/?v=60/g' web/templates/*.html`).
 - Static URLs are `{% static 'app.js' %}` etc. (files sit directly in `web/static/`).
 - Form help text goes behind `?` icons: `<span class="help" id="help-x" tabindex="-1" role="img" data-tip="…" aria-label="…">?</span>` inside the `<label>`, with `aria-describedby="help-x"` on the field. Keep `data-tip` and `aria-label` identical. Don't add `<p class="hint">` paragraphs (the user wants descriptions behind `?`).
 - Every form must work with Tab alone. app.js handles focus wrapping, Enter-to-next-field, and the label chips/date picker keyboard.

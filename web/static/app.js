@@ -839,13 +839,23 @@ function flip(prev, sel = '.card', only = null) {
 
 /* ---- board ---- */
 function board(L, showEmpty = true) {
-  const prev = snapshot();
+  const prev = snapshot(), prevPj = snapshot('.pj');
   PJ = projs(L, showEmpty);
   if (roomQ()) PJ = PJ.filter(p => roomFor(p) === roomQ() || L.some(t => t.project === p));
   if (PROJECT_PARAM) PJ = PJ.filter(p => p.toLowerCase() === PROJECT_PARAM);
   if (LABEL_PARAM || RANK_PARAM) PJ = PJ.filter(p => L.some(t => t.project === p));
   // projects whose tasks are all due later stay off the Board (projects with no tasks yet still show)
   if (!SHOW_ALL) PJ = PJ.filter(p => L.some(t => t.project === p) || !T.some(t => t.project === p));
+
+  // projects with nothing left to do (every task done, or none yet) sink below the rest, keeping their order.
+  // A project whose last card is landing holds its place until the landing ends (endLanding redraws).
+  const hasWork = p => L.some(t => t.project == p && t.status != 'done');
+  HELD = LANDING && LAST_GROUP.get(LANDING.p) === true && !hasWork(LANDING.p) ? LANDING.p : null;
+  const busy = p => hasWork(p) || p === HELD;
+  const nBusy = PJ.filter(busy).length;
+  PJ = PJ.filter(busy).concat(PJ.filter(p => !busy(p)));
+  const regroup = PJ.some(p => LAST_GROUP.has(p) && LAST_GROUP.get(p) !== busy(p));
+  LAST_GROUP = new Map(PJ.map(p => [p, busy(p)]));
 
   // Column headings with a colored divider and a task count; clicking one shows only that column
   let h = '<div class="head" role="group" aria-label="Show tasks by status">' + S.map(s =>
@@ -882,7 +892,9 @@ function board(L, showEmpty = true) {
 
   const filtered = !showEmpty || !!(SHOW_ALL || STATUS_Q || roomQ() || PROJECT_PARAM || LABEL_PARAM || RANK_PARAM);
   pjDefaults(filtered);
+  if (!filtered) sinkOpen(PJ.slice(0, nBusy), PJ.slice(nBusy));
   PJ.forEach((p, i) => {
+    if (i == nBusy && nBusy) h += `<div class="sinkhd" role="separator"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Nothing left to do<small>${PJ.length - nBusy} project${PJ.length - nBusy == 1 ? '' : 's'}</small></span></div>`;
     const pt = L.filter(t => t.project == p);
     const pColor = projCol(p);
     const prData = PR.find(x => x[0] == prio(p)) || [3, 'Medium'];
@@ -891,13 +903,14 @@ function board(L, showEmpty = true) {
     const open = pjIsOpen(p, filtered);
 
     // header: name + priority, then the task counts, then the buttons (three lines on a phone, one on a wide screen)
-    h += `<section class="pj${open ? '' : ' shut'}" data-p="${esc(p)}" style="--proj-color:${pColor};"><div class="proj">` +
+    h += `<section class="pj${open ? '' : ' shut'}" data-p="${esc(p)}" data-key="pj:${esc(p)}" style="--proj-color:${pColor};"><div class="proj">` +
+      // buttons on the left: delete (outer edge, away from the toggle), + Task, then the chevron beside the name
+      `<span class="pact"><button type="button" class="pbtn del" data-drop="del" onclick="delProj(${i})" title="Delete this project (or hold one of its cards here to delete that task)" aria-label="Delete project ${esc(p)}">${TRASH_SVG}<span class="dl">Delete</span></button>` +
+      `<button type="button" class="pbtn" onclick="addTask(${i})" title="Add a task to this project" aria-label="Add a task to ${esc(p)}">${PLUS_SVG}<span class="pbl">Task</span></button></span>` +
       `<button type="button" class="pjt" aria-expanded="${open}" onclick="togglePj(${i})" title="${open ? 'Collapse' : 'Expand'} this project">` +
       `<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>` +
       `<span class="pname"><span class="pn">${esc(p)}</span> <small class="pprio">${prData[1]} priority</small></span>` +
-      `<small class="pstats">${openN} open · ${doneCount}/${pt.length} done</small></button>` +
-      `<span class="pact"><button type="button" class="pbtn" onclick="addTask(${i})" title="Add a task to this project">${PLUS_SVG}<span>Task</span></button>` +
-      `<button type="button" class="pbtn del" data-drop="del" onclick="delProj(${i})" title="Delete this project (or drop a card here to delete the task)" aria-label="Delete project ${esc(p)}">${TRASH_SVG}<span class="dl">Delete</span></button></span></div><div class="lane${STATUS_Q ? ' one' : ''}">`;
+      `<small class="pstats">${openN} open · ${doneCount}/${pt.length} done</small></button></div><div class="lane${STATUS_Q ? ' one' : ''}">`;
     // filtered to one status: the other columns are still there (hidden), and open while a card is held
     for (const s of S) {
       const alt = STATUS_Q && s != STATUS_Q;
@@ -912,6 +925,8 @@ function board(L, showEmpty = true) {
   if (m) m.innerHTML = h;
   lastIds = new Set(L.map(t => t.id));
   markLanding();
+  // a project that sank or rose slides to its new place (its cards ride along with it)
+  if (regroup) { flip(prevPj, '.pj'); return; }
   // a moved card glides in by itself (flyTo); while a card moves, only its own project animates
   flip(prev, '.card', el => el.id !== 'card-' + FLYING &&
     (!FLIP_ONLY || (el.closest('.pj') || {}).dataset?.p === FLIP_ONLY));
@@ -923,7 +938,8 @@ function board(L, showEmpty = true) {
    every other project starts collapsed. Those defaults are decided once per browser tab session (so moving the
    last card out of a project doesn't snap it shut), and the user's own toggles are kept in sessionStorage.
    Filtered views (search, ?room=, ?project=, ?label=, ?rank=, a status column) start with everything expanded.
-   Clicking a project's chevron, name, or any empty part of its panel toggles it. */
+   Clicking a project's chevron, name, or any empty part of its panel toggles it.
+   Projects with nothing left to do sink to the bottom (board()); see sinkOpen() for what opens instead. */
 const OPEN_FIRST = 2;
 let PJ_OPEN = (() => { try { return JSON.parse(sessionStorage.getItem('boardOpen2')) || {}; } catch (e) { return {}; } })();
 let PJ_OPEN_F = {};          // toggles made while the board is filtered (this page only)
@@ -938,6 +954,21 @@ function pjDefaults(filtered) {
   let changed = false;
   all.forEach(p => { if (!(p in PJ_OPEN)) { PJ_OPEN[p] = FIRST_OPEN.includes(p); changed = true; } });
   if (changed) savePjOpen();
+}
+// A project that just sank (its last task done) collapses, and the next projects with work open in its place
+// so OPEN_FIRST of them stay expanded at the top. SUNK = the sunk projects as of the last unfiltered render.
+let SUNK = (() => { try { const a = JSON.parse(sessionStorage.getItem('boardSunk')); return Array.isArray(a) ? new Set(a) : null; } catch (e) { return null; } })();
+let LAST_GROUP = new Map();  // project -> had work on the last render (to animate a project sinking or rising)
+let HELD = null;             // project kept in place while its last card lands
+function sinkOpen(busy, clear) {
+  const sank = SUNK ? clear.filter(p => !SUNK.has(p)) : [];
+  SUNK = new Set(clear);
+  try { sessionStorage.setItem('boardSunk', JSON.stringify(clear)); } catch (e) { /* private browsing */ }
+  if (!sank.length) return;
+  sank.forEach(p => { PJ_OPEN[p] = false; });
+  let n = busy.filter(p => PJ_OPEN[p]).length;
+  for (const p of busy) { if (n >= OPEN_FIRST) break; if (!PJ_OPEN[p]) { PJ_OPEN[p] = true; n++; } }
+  savePjOpen();
 }
 const pjIsOpen = (p, filtered) => (filtered ? PJ_OPEN_F[p] !== false : !!PJ_OPEN[p]);
 const boardFiltered = () => !!(filterQ() || SHOW_ALL || STATUS_Q || roomQ() || PROJECT_PARAM || LABEL_PARAM || RANK_PARAM);
@@ -1011,7 +1042,7 @@ function holdOff(except) {
 let LANDING = null;   // { p: project, s: status, timer }
 function land(p, s) {
   endLanding(true);
-  LANDING = { p, s, timer: setTimeout(() => endLanding(), 2600) };
+  LANDING = { p, s, timer: setTimeout(() => endLanding(false, true), 2600) };
 }
 function markLanding() {           // board() calls this after each render
   const pj = LANDING && pjOf(LANDING.p);
@@ -1020,13 +1051,15 @@ function markLanding() {           // board() calls this after each render
   const col = pj.querySelector(`.col[data-st="${LANDING.s}"]`);
   if (col) col.classList.add('shine');
 }
-function endLanding(now = false) {
+function endLanding(now = false, timer = false) {
   if (!LANDING) return;
   clearTimeout(LANDING.timer);
   const pj = pjOf(LANDING.p);
   LANDING = null;
   if (!pj) return;
   const off = () => { pj.classList.remove('landing'); pj.querySelectorAll('.col.shine').forEach(c => c.classList.remove('shine')); };
+  // now it can sink (not while a card is held: the next redraw sinks it)
+  if (timer && HELD === pj.dataset.p && V === 'board' && !TD) { HELD = null; draw(); return; }
   if (now) off(); else resizePj(pj, off);
 }
 
@@ -1178,7 +1211,7 @@ function addTask(i) {
 async function dropDelete(id) {
   const t = T.find(x => x.id == id);
   if (!t) return;
-  if (!await ask({ title: 'Delete task?', message: `“${t.title}” will be permanently deleted. This can't be undone.`, ok: 'Delete task', danger: true, icon: '🗑️' })) return;
+  if (!await ask({ title: 'Delete task?', message: `“${t.title}” in ${t.project} will be permanently deleted. This can't be undone.`, ok: 'Delete task', danger: true, icon: '🗑️' })) return;
   const r = await api('/api/tasks/' + t.id + '/del', { method: 'DELETE' });
   if (!r.ok) {
     await ask({ title: 'Delete failed', message: `“${t.title}” could not be deleted. Please try again.`, ok: 'OK', info: true });
@@ -4240,6 +4273,8 @@ function touchBegin() {
   touchAutoScroll();
 }
 
+const BIN_MS = 700;   // how long a card must rest on its project's trash before a drop deletes it
+
 function touchMoveTo(x, y) {
   TD.lastY = y;
   TD.ghost.style.transform = `translate(${x - TD.dx}px, ${y - TD.dy}px)`;
@@ -4255,6 +4290,13 @@ function touchMoveTo(x, y) {
     if (deny) deny.classList.add('deny');
     TD.ghost.classList.toggle('nodrop', !!deny);
     if (col) col.classList.add('over');
+    // the trash takes the card only after it rests there for BIN_MS (so passing over it on the way up doesn't delete)
+    if (bin !== TD.bin) {
+      clearTimeout(TD.binTimer);
+      document.querySelectorAll('.armed').forEach(b => b.classList.remove('armed'));
+      TD.bin = bin;
+      if (bin) TD.binTimer = setTimeout(() => { if (TD && TD.bin === bin) { bin.classList.add('armed'); if (navigator.vibrate) navigator.vibrate(20); } }, BIN_MS);
+    }
     TD.target = col;
   } else {
     const zone = under && under.closest('.pzone');
@@ -4279,11 +4321,12 @@ function touchDrop() {
   if (kind == 'card') {
     // the lifted copy glides into the new column (or back home); a real move keeps the columns open for the landing
     const t = T.find(x => x.id == id), s = target && target.dataset.st;
-    if (t && target && target.dataset.drop == 'del') {   // dropped on the trash can: back home, then ask
+    if (t && target && target.dataset.drop == 'del') {   // dropped on the trash can: back home, then ask (if armed)
+      const del = target.classList.contains('armed') && (target.closest('.pj') || {}).dataset?.p === t.project;
       TD.ghost = null;
       touchCancel();
       flyTo(ghost, id);
-      dropDelete(id);
+      if (del) dropDelete(id);
       return;
     }
     const moving = !!(t && s && t.status != s);
@@ -4301,14 +4344,17 @@ function touchDrop() {
 function touchCancel() {
   if (!TD) return;
   clearTimeout(TD.timer);
+  clearTimeout(TD.binTimer);
   TD.el.draggable = TD.dr;       // project rows: mouse drag still works on touch laptops
   if (TD.ghost) TD.ghost.remove();
   TD.el.classList.remove('moving', 'pressing');
-  document.querySelectorAll('.col.over, [data-drop].over, .pbtn.deny').forEach(c => c.classList.remove('over', 'deny'));
+  document.querySelectorAll('.col.over, [data-drop].over, .pbtn.deny, .armed').forEach(c => c.classList.remove('over', 'deny', 'armed'));
   if (TD.kind == 'proj' && TD.active) pdEnd();
   if (TD.kind == 'card' && !TD.keep) holdOff();
   document.body.classList.remove('lifting');
   TD = null;
+  // a project that finished while a card was held sinks once that card is back in place
+  if (HELD && !LANDING && V === 'board') setTimeout(() => { if (!TD && HELD && !LANDING) draw(); }, 400);
 }
 
 // Home map: tapping anywhere else closes the room tooltip.

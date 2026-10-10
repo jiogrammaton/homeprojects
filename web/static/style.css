@@ -1315,6 +1315,34 @@ input.lname:focus { outline: none; border-color: var(--acc); background: var(--d
 }
 .roombar a { margin-left: auto; color: #2b6cb0; font-weight: 600; }
 .roombar > a { white-space: nowrap; }
+/* the Board's "Nothing left to do" divider above the projects that sank (every task done): a green pill on a rule */
+.sinkhd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 40px 0 8px;
+}
+.sinkhd::before, .sinkhd::after { content: ''; flex: 1; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--acc) 45%, var(--edge-light)); }
+.sinkhd > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px 7px 10px;
+  border: 2px solid var(--acc);
+  border-radius: 999px;
+  background: var(--panel);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  box-shadow: 0 4px 12px var(--shadow);
+  white-space: nowrap;
+}
+.sinkhd svg { width: 20px; height: 20px; padding: 3px; border-radius: 50%; background: var(--acc); fill: none; stroke: #fff; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.sinkhd small { color: var(--mut2); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: none; }
+.sinkhd small::before { content: '·'; margin-right: 8px; }
+@media (max-width: 600px) { .sinkhd { gap: 10px; } .sinkhd > span { letter-spacing: 1px; padding-right: 12px; } }
 
 /* ---- sign-in and password pages ---- */
 body.auth {
@@ -2042,9 +2070,14 @@ body.lifting, body.lifting * { user-select: none; cursor: grabbing !important; }
 .pj.holding .pbtn.del { width: auto; padding: 0 14px; gap: 6px; color: #ffb3b8; border: 1px dashed color-mix(in srgb, var(--danger) 70%, transparent);
   background: color-mix(in srgb, var(--danger) 10%, transparent); animation: binReady 0.3s ease-out both; }
 .pj.holding .pbtn.del .dl { display: inline; }
-.pj.holding .pbtn.del.over { color: #fff; border-style: solid; border-color: var(--danger); background: color-mix(in srgb, var(--danger) 45%, transparent);
+/* over the trash: it fills up red for BIN_MS (app.js); only then (.armed) does a drop delete */
+.pj.holding .pbtn.del.over { color: #fff; background: linear-gradient(90deg, color-mix(in srgb, var(--danger) 55%, transparent) 0 0) no-repeat left / 0% 100%,
+  color-mix(in srgb, var(--danger) 14%, transparent); animation: binFill 0.7s linear forwards; }
+.pj.holding .pbtn.del.armed { border-style: solid; border-color: var(--danger); background: color-mix(in srgb, var(--danger) 55%, transparent); animation: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent), 0 0 18px color-mix(in srgb, var(--danger) 55%, transparent); scale: 1.06; }
-.pj.holding .pbtn.del.over svg { stroke: #fff; }
+.pj.holding .pbtn.del:is(.over, .armed) svg { stroke: #fff; }
+@keyframes binFill { to { background-size: 100% 100%, auto; } }
+@media (prefers-reduced-motion: reduce) { .pj.holding .pbtn.del.over { animation: none; } }
 @keyframes binReady { from { scale: 0.85; opacity: 0.4; } to { scale: 1; opacity: 1; } }
 
 /* ---- Home: Rooms heading with its filter menu; Whole house shows the overall rank ---- */
@@ -2058,8 +2091,11 @@ select.rfilt:hover { border-color: rgba(255, 255, 255, 0.26); }
   background: color-mix(in srgb, var(--rc) 30%, transparent); font-size: 11px; font-weight: 700; line-height: 18px; vertical-align: 1px; }
 .rankchip { padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--rc) 30%, transparent); border: 1px solid var(--rc); }
 
-/* ---- board: project header (name + priority · counts · buttons) ---- */
-.pjt { flex-wrap: wrap; column-gap: 8px; row-gap: 2px; }
+/* ---- board: project header (buttons on the left: trash · + Task, then chevron + name + priority · counts) ---- */
+.pj .proj { flex-wrap: nowrap; justify-content: flex-start; gap: 10px; }
+.pj .pact { position: relative; padding-right: 12px; }
+.pj .pact::after { content: ''; position: absolute; right: 0; top: 4px; bottom: 4px; border-right: 1px solid rgba(255, 255, 255, 0.14); }
+.pjt { flex: 1 1 auto; flex-wrap: wrap; column-gap: 8px; row-gap: 2px; }
 .pjt .pn { overflow-wrap: anywhere; }
 .proj .pjt small { margin-left: 0; }
 .pjt .pprio { margin-left: 6px; white-space: nowrap; }
@@ -2068,13 +2104,15 @@ select.rfilt:hover { border-color: rgba(255, 255, 255, 0.26); }
 .pj { cursor: pointer; }                       /* an empty spot toggles the project */
 .pj .card { cursor: grab; }
 @media (max-width: 600px) {
-  /* three lines: name + priority / counts / buttons */
-  .proj { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
-  .pjt { display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 8px; align-items: center; }
-  .pjt .chev { grid-row: 1 / span 2; }
+  /* buttons (+ Task icon only), then the name + priority over the counts */
+  .pj .proj { align-items: flex-start; gap: 8px; }
+  .pj .pact { padding-right: 8px; gap: 6px; }
+  .pact .pbl { display: none; }
+  .pact .pbtn:not(.del) { padding: 0; width: 40px; }
+  .pjt { display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 8px; align-items: start; padding-top: 7px; }
+  .pjt .chev { grid-row: 1; margin-top: -1px; }
   .pjt .pstats { grid-column: 2; }
   .pjt .pstats::before { content: none; }
-  .pact { justify-content: flex-start; }
 }
 
 /* ---- board: while a card is held, + Task is grayed out (nothing happens if the card is dropped there) ---- */

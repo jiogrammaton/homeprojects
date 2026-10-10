@@ -6,8 +6,11 @@
   <title>{% block title %}Home Projects{% endblock %} · Home Projects</title>
   {% load static %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{% static 'style.css' %}?v=54">
-  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=54">
+  <link rel="stylesheet" href="{% static 'style.css' %}?v=59">
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=59">
+  <!-- iPhone/iPad home screen: iOS ignores SVG icons and would draw a letter tile from the page title -->
+  <link rel="apple-touch-icon" href="{% static 'apple-touch-icon.png' %}?v=59">
+  <meta name="apple-mobile-web-app-title" content="Home Projects">
 </head>
 <body data-view="{{ view }}" data-tab="{{ tab }}" data-user="{{ request.user.get_username }}">
 <header class="topbar">
@@ -133,6 +136,6 @@
 <dialog id="iw" class="wiz" aria-labelledby="iw-title"><div id="iw-body"></div></dialog>
 
 {{ default_map|json_script:"map-default" }}
-<script src="{% static 'app.js' %}?v=54"></script>
+<script src="{% static 'app.js' %}?v=59"></script>
 </body>
 </html>

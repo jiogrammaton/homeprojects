@@ -63,7 +63,7 @@ Node isn't installed; `gjs` can syntax-check JS (`new Function(src)`).
 └── web/                           # the Django app (Python package `web`, app label `tasks`)
     ├── models.py  views.py  urls.py  ranking.py  rooms.py  repeat.py  security.py  apps.py  admin.py  tests.py
     ├── migrations/                # 0001..0004
-    ├── static/                    # app.js, style.css, favicon.svg  (served at /static/<name>)
+    ├── static/                    # app.js, style.css, favicon.svg, apple-touch-icon.png  (served at /static/<name>)
     └── templates/                 # base.html + page stubs, auth_base.html, login.html, password_change.html
 ```
 
@@ -83,7 +83,7 @@ Node isn't installed; `gjs` can syntax-check JS (`new Function(src)`).
 - Python: PEP 8 via ruff (`pyproject.toml`), module docstrings explaining the file's role, sections marked `# ---- Name ----`, small function-based views (no DRF/forms), `require_GET`/`require_POST`/`require_http_methods` on API views (wrong method = 405).
 - JS/CSS: match the compact style: short names, inline-handler HTML strings, section markers `/* ---- name ---- */`. The top of `app.js` and `style.css` lists the sections.
 - Visual consistency matters to the user: new UI should reuse `.prow`/`.mrow`/`.pgroup`/`.stats-card`/`.pbtn` patterns and the existing palette (slate/navy + green accent, no brown, no black walls).
-- Bump the `?v=N` cache-busting number in `base.html` and `auth_base.html` on every CSS/JS change (currently **54**).
+- Bump the `?v=N` cache-busting number in `base.html` and `auth_base.html` on every CSS/JS change (currently **59**).
 - Keep `CLAUDE.md` files current: when you change a file, update its folder's `CLAUDE.md`.
 
 ## Known gaps / gotchas

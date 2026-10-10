@@ -5,8 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}{% endblock %} · Home Projects</title>
   {% load static %}
-  <link rel="stylesheet" href="{% static 'style.css' %}?v=54">
-  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=54">
+  <link rel="stylesheet" href="{% static 'style.css' %}?v=59">
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=59">
+  <!-- iPhone/iPad home screen: iOS ignores SVG icons and would draw a letter tile from the page title -->
+  <link rel="apple-touch-icon" href="{% static 'apple-touch-icon.png' %}?v=59">
+  <meta name="apple-mobile-web-app-title" content="Home Projects">
 </head>
 <body class="auth">
 <main class="authbox">
