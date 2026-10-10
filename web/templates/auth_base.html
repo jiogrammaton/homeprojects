@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}{% endblock %} · Home Projects</title>
   {% load static %}
-  <link rel="stylesheet" href="{% static 'style.css' %}?v=41">
-  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=41">
+  <link rel="stylesheet" href="{% static 'style.css' %}?v=54">
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=54">
 </head>
 <body class="auth">
 <main class="authbox">
@@ -18,5 +18,40 @@
   </div>
   {% block content %}{% endblock %}
 </main>
+<script>
+  // Keyboard help for the sign-in pages. iPad Safari ignores autofocus and its Tab key doesn't
+  // always move between fields, so: focus the first empty field on load, send typing there while nothing
+  // is focused, handle Tab/Shift+Tab between the form's controls, and Enter on a field moves to
+  // the next one until the last field.
+  (() => {
+    const f = document.querySelector('.authbox form');
+    if (!f) return;
+    const els = () => [...f.querySelectorAll('input:not([type=hidden]),button')];
+    // the first empty field (after a failed sign-in the username is already filled in)
+    const first = () => els().find(x => x.tagName === 'INPUT' && !x.value) || els()[0];
+    const start = () => { if (!f.contains(document.activeElement)) first().focus(); };
+    start();
+    addEventListener('pageshow', start);
+    document.addEventListener('keydown', e => {
+      const a = document.activeElement, list = els(), i = list.indexOf(a);
+      if (i < 0) {
+        // Nothing focused yet: Tab or a typed character goes to the first field
+        if (e.key === 'Tab') { e.preventDefault(); first().focus(); }
+        else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault(); const u = first(); u.focus(); if (u.tagName === 'INPUT') u.value += e.key;
+        }
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        list[(i + (e.shiftKey ? -1 : 1) + list.length) % list.length].focus();
+      } else if (e.key === 'Enter' && a.tagName === 'INPUT') {
+        // Enter (or the keyboard's "Next" key) moves on until the next empty field is the button
+        const nxt = list.slice(i + 1).find(x => x.tagName === 'INPUT' && !x.value);
+        if (nxt) { e.preventDefault(); nxt.focus(); }
+      }
+    });
+  })();
+</script>
 </body>
 </html>

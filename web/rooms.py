@@ -4,12 +4,16 @@ The user draws the map in the Home page's map editor; it's saved in the settings
     {'floors': [{'id', 'name'}, ...], 'ground': <floor id with the yard>,
      'rooms': [{'id', 'name', 'emoji', 'floor', 'x', 'y', 'w', 'h'}, ...]}     (x/y/w/h in an 800 x 540 plan)
 Until then DEFAULT_MAP (the starter layout) is used. The page passes DEFAULT_MAP to app.js (json_script).
-Stairs ({'kind': 'stairs', 'floor', 'to', ...}), blocked-off areas ({'kind': 'blocked', ...}) and trees
-({'kind': 'tree'}) are stored alongside rooms; they're drawn on the map but aren't rooms. Structures
-({'kind': 'structure'}, e.g. a shed) are rooms.
+Stairs ({'kind': 'stairs', 'floor', 'to', ...}), blocked-off areas ({'kind': 'blocked', ...}), trees
+({'kind': 'tree'}) and doors ({'kind': 'door', 'swing', 'opening'}: a door or a plain opening across a
+wall) are stored alongside rooms; they're drawn on the map but aren't rooms. Structures ({'kind': 'structure'},
+e.g. a shed) are rooms.
 
 The floor with id 'outside' is the property around the house (yard areas, structures, trees). Its items use the same
 plan units, on a bigger canvas centred on the house, so they may have negative coordinates.
+
+Yard areas (rooms on 'outside', e.g. Back yard, Side yard; not structures) are parts of the yard, not rooms of their
+own: tasks or projects stored with an area's id count toward 'yard' (canonical_room). app.js: isYardArea/canonRoom.
 
 'house' (Whole house) and 'yard' (Yard & exterior) are built in: they always exist and are never drawn as rooms.
 The yard's name and icon can be changed in the map editor (map['yard'] = {'name', 'emoji'}).
@@ -50,6 +54,7 @@ DEFAULT_MAP = {
 # Extra words accepted in a CSV "Room" column (matched without case or spaces). Used only when the
 # room they point to still exists on the user's map.
 ROOM_KINDS = ('room', 'structure')  # map items that are rooms (can hold tasks)
+OUTSIDE = 'outside'  # the floor id of the property around the house
 
 ALIASES = {
     'wholehouse': 'house',
@@ -101,14 +106,34 @@ def current_map(settings=None):
     return DEFAULT_MAP
 
 
+def _is_yard_area(r):
+    return r.get('floor') == OUTSIDE and r.get('kind', 'room') == 'room'
+
+
+def yard_areas(settings=None):
+    """{id: name} of the yard areas on the map (they count as the yard)."""
+    m = current_map(settings)
+    return {
+        str(r['id']): str(r.get('name') or '')
+        for r in m['rooms']
+        if isinstance(r, dict) and r.get('id') and _is_yard_area(r)
+    }
+
+
+def canonical_room(rid, areas):
+    """A stored room id as it counts now: renamed rooms move on, a yard area is the yard."""
+    rid = LEGACY_ROOMS.get(rid, rid)
+    return 'yard' if rid in areas else rid
+
+
 def all_rooms(settings=None):
     """[(id, name, emoji)] for the built-ins plus every room and structure on the map
-    (stairs, blocked-off areas and trees aren't rooms). The yard may have been renamed."""
+    (stairs, blocked-off areas, trees and yard areas aren't rooms). The yard may have been renamed."""
     m = current_map(settings)
     rooms = [
         (str(r['id']), str(r.get('name') or ''), str(r.get('emoji') or ''))
         for r in m['rooms']
-        if isinstance(r, dict) and r.get('id') and r.get('kind', 'room') in ROOM_KINDS
+        if isinstance(r, dict) and r.get('id') and r.get('kind', 'room') in ROOM_KINDS and not _is_yard_area(r)
     ]
     builtins = list(BUILTIN_ROOMS)
     yard = m.get('yard') if isinstance(m.get('yard'), dict) else {}
@@ -132,6 +157,8 @@ def match_room(text, rooms=None):
         if key == _key(rid) or key == _key(name):
             return rid
     alias = ALIASES.get(key)
+    if not alias and any(key in (_key(aid), _key(name)) for aid, name in yard_areas().items()):
+        alias = 'yard'  # a yard area ("Back yard") is part of the yard
     return alias if alias and any(rid == alias for rid, _, _ in rooms) else None
 
 
@@ -166,7 +193,7 @@ def guess_room(project, settings=None, rooms=None):
             base = str(r['name']).lower()
             base = base[:-1] if base.endswith('s') else base
             if base and base in name:
-                return str(r['id'])
+                return 'yard' if _is_yard_area(r) else str(r['id'])
     for rid, pattern in ROOM_GUESS:
         if re.search(pattern, project or '', re.I) and rid in ids:
             return rid
@@ -177,5 +204,5 @@ def room_for_project(project, settings, rooms):
     """The room a project's tasks count toward: the stored one if it's on the map, else a guess (roomFor in app.js)."""
     ids = {rid for rid, _, _ in rooms}
     stored = (settings.get('rooms') or {}).get(project) if isinstance(settings.get('rooms'), dict) else None
-    stored = LEGACY_ROOMS.get(stored, stored)
+    stored = canonical_room(stored, yard_areas(settings))
     return stored if stored in ids else guess_room(project, settings, rooms)

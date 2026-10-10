@@ -6,7 +6,7 @@
    CSRF header, handles 401/403). Always escape user text with esc().
 
    Contents (search for the "/* ---- <name>" markers; they run in this order):
-     globals & helpers · api() · ask() dialogs · palettes · Repeat frequencies · rooms · Outside · room shapes ·
+     globals & helpers · api() · ask() dialogs · palettes · Repeat frequencies · rooms · Outside · room shapes · upcoming window ·
      load()/draw() · FLIP animation helpers · board · collapsing projects · card drag (mouse) · cards · moveTask ·
      projects: add task shortcut + delete · settings (Projects, Tasks, Labels tabs) · settings: miscellaneous ·
      stats · form (task/project dialog) · themed date picker · quick entry · save · CSV import wizard · calendar ·
@@ -287,8 +287,16 @@ const isBlocked = r => r && r.kind === 'blocked';
 // Outside: trees (not rooms) and structures like a shed (rooms: they hold tasks)
 const isTree = r => r && r.kind === 'tree';
 const isStructure = r => r && r.kind === 'structure';
+// Doors (inside floors): an opening drawn across a wall, just for looks. The box is the opening:
+// its length along the wall × DOOR_T, centred on the wall line. swing 0-3: bit 1 = which side it opens
+// to, bit 2 = which end the hinge is at (see doorSVG). opening: true = just a gap in the wall, no door.
+const isDoor = r => r && r.kind === 'door';
+const DOOR_T = 10, DOOR_LEN = 30, DOOR_MIN = 20, DOOR_MAX = 120, DOOR_SNAP = 40;
 // Map items that aren't rooms: no tasks, not in room pickers or counts
-const isFeature = r => isStairs(r) || isBlocked(r) || isTree(r);
+const isFeature = r => isStairs(r) || isBlocked(r) || isTree(r) || isDoor(r);
+// Yard areas (Back yard, Side yard… on Outside; not structures) are parts of the yard, not rooms of their own:
+// they're drawn and named on the map, but their tasks count toward the yard (canonRoom)
+const isYardArea = r => !!r && isOutside(r.floor) && (r.kind || 'room') == 'room';
 const floorIdx = (id, floors = MAP.floors) => floors.findIndex(f => f.id == id);
 // the floor above if there is one, else the one below (never Outside)
 function adjacentFloor(fid, floors = MAP.floors) {
@@ -322,9 +330,9 @@ function outBounds(map = MAP, head = OUT_HEAD) {
 }
 // what a floor's map shows, in plan units
 const viewOf = (fid, map = MAP) => (isOutside(fid) ? outBounds(map) : { x: 0, y: 0, w: PLAN_W, h: PLAN_H });
-const layerOf = r => (isTree(r) ? 'tree' : isStructure(r) ? 'structure' : isStairs(r) ? 'stairs' : 'room');
-// pairs that may overlap: stacked flights, trees, and different kinds of things outside
-const coexist = (a, b) => (isStairs(a) && isStairs(b)) || (isTree(a) && isTree(b)) || (isOutside(a.floor) && layerOf(a) != layerOf(b));
+const layerOf = r => (isDoor(r) ? 'door' : isTree(r) ? 'tree' : isStructure(r) ? 'structure' : isStairs(r) ? 'stairs' : 'room');
+// pairs that may overlap: doors (they sit on walls), stacked flights, trees, and different kinds of things outside
+const coexist = (a, b) => isDoor(a) || isDoor(b) || (isStairs(a) && isStairs(b)) || (isTree(a) && isTree(b)) || (isOutside(a.floor) && layerOf(a) != layerOf(b));
 // Outside, nothing may cover the house
 function hitsHouse(r, map) {
   const h = isOutside(r.floor) && houseOutline(map);
@@ -352,7 +360,8 @@ function withOutside(m) {
 // Every floor draws these same walls, so floors line up; rooms on other floors stay inside them.
 // (No ground-floor rooms yet: the box around everything on the map.)
 function houseOutline(map = MAP) {
-  return footprint(map.rooms.filter(r => r.floor == map.ground)) || footprint(map.rooms.filter(r => !isOutside(r.floor)));
+  // (doors sit across the walls, half outside: they don't make the house bigger)
+  return footprint(map.rooms.filter(r => r.floor == map.ground && !isDoor(r))) || footprint(map.rooms.filter(r => !isOutside(r.floor) && !isDoor(r)));
 }
 
 // The area a room may occupy: inside the walls on other floors, the whole plan on the ground floor,
@@ -452,6 +461,88 @@ const shapeSVG = r => r.pts
   ? `<polygon points="${r.pts.map(q => q.join(',')).join(' ')}"/>`
   : `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"/>`;
 
+/* ---- doors ----
+   A door snaps onto the closest wall (a room's, a blocked-off area's, or the house's outer wall) and turns
+   to match it. It's drawn on top of the walls: a pale opening, the door leaf, and its swing. */
+// Wall segments on a floor: [[x, y], [x, y]] pairs
+function wallSegs(fid, map) {
+  const segs = [], add = P => P.forEach((a, i) => { const b = P[(i + 1) % P.length]; if (!samePt(a, b)) segs.push([a, b]); });
+  map.rooms.filter(r => r.floor == fid && !isStairs(r) && !isTree(r) && !isDoor(r)).forEach(r => add(ptsOf(r)));
+  const o = !isOutside(fid) && houseOutline(map);
+  if (o) add(ptsOf(o));
+  return segs;
+}
+// The box for a door len long near (cx, cy): on the closest wall within DOOR_SNAP (turned to match it, kept
+// within that wall, shortened if the wall is shorter), else just there, turned the way it was (across or not)
+function doorAt(cx, cy, len, across, fid, map) {
+  let best = null, bd = DOOR_SNAP;
+  wallSegs(fid, map).forEach(([a, b]) => {
+    const h = a[1] == b[1], lo = Math.min(h ? a[0] : a[1], h ? b[0] : b[1]), hi = Math.max(h ? a[0] : a[1], h ? b[0] : b[1]);
+    if (hi - lo < DOOR_MIN) return;
+    const along = h ? cx : cy, dist = Math.hypot(Math.max(0, lo - along, along - hi), h ? cy - a[1] : cx - a[0]);
+    if (dist < bd) { bd = dist; best = { h, lo, hi, line: h ? a[1] : a[0] }; }
+  });
+  if (!best) {
+    return across ? { x: snap(cx - len / 2), y: snap(cy) - DOOR_T / 2, w: len, h: DOOR_T }
+      : { x: snap(cx) - DOOR_T / 2, y: snap(cy - len / 2), w: DOOR_T, h: len };
+  }
+  const L = Math.min(len, best.hi - best.lo), start = clampN(snap((best.h ? cx : cy) - L / 2), best.lo, best.hi - L);
+  return best.h ? { x: start, y: best.line - DOOR_T / 2, w: L, h: DOOR_T } : { x: best.line - DOOR_T / 2, y: start, w: DOOR_T, h: L };
+}
+// The stretch of wall door r sits on ({lo, hi} along it; collinear walls under it joined), or null if it's not on one
+function doorSeg(r, map) {
+  const a = r.w >= r.h, line = a ? r.y + r.h / 2 : r.x + r.w / 2, c = a ? r.x + r.w / 2 : r.y + r.h / 2;
+  let lo = Infinity, hi = -Infinity;
+  wallSegs(r.floor, map).forEach(([p, q]) => {
+    if ((p[1] == q[1]) != a || (a ? p[1] : p[0]) != line) return;
+    const s0 = Math.min(a ? p[0] : p[1], a ? q[0] : q[1]), s1 = Math.max(a ? p[0] : p[1], a ? q[0] : q[1]);
+    if (s0 <= c && c <= s1) { lo = Math.min(lo, s0); hi = Math.max(hi, s1); }
+  });
+  return lo < hi ? { lo, hi } : null;
+}
+
+// A door: its swing (dashed quarter circle), the leaf (open, at right angles to the wall), and the opening.
+// The swing and leaf are drawn on their own (doorSwingSVG) inside the room they open into, under its walls and
+// label; doorSVG draws just the gap in the wall, on top of the walls. hit = a bigger invisible box to grab it by (editor).
+function doorSVG(d, attrs = '', hit = 0, map = MAP) {
+  const across = d.w >= d.h, t = DOOR_T / 2;
+  const grab = hit ? `<rect class="dhit" x="${d.x - hit}" y="${d.y - hit}" width="${d.w + 2 * hit}" height="${d.h + 2 * hit}"/>` : '';
+  // drawn as thick as the wall it's on (the house's outer walls are thicker than the inner ones)
+  const o = houseOutline(map), line = across ? d.y + t : d.x + t;
+  const outer = !!o && (across ? line == o.y || line == o.y + o.h : line == o.x || line == o.x + o.w), wt = outer ? 8 : 5, h = wt / 2;
+  const band = across ? `x="${d.x}" y="${line - h}" width="${d.w}" height="${wt}"` : `x="${line - h}" y="${d.y}" width="${wt}" height="${d.h}"`;
+  if (d.opening) {
+    // an opening: the wall drawn lighter, with a dashed divider down the middle and a cap where the wall ends on each side
+    const [x0, y0, x1, y1] = across ? [d.x, line, d.x + d.w, line] : [line, d.y, line, d.y + d.h];
+    const caps = across ? `M${x0} ${line - h}v${wt}M${x1} ${line - h}v${wt}` : `M${line - h} ${y0}h${wt}M${line - h} ${y1}h${wt}`;
+    return `<g class="door opening${outer ? ' outer' : ''}" ${attrs}><rect class="dgap" ${band}/>` +
+      `<path class="ddiv" d="M${x0} ${y0}L${x1} ${y1}"/><path class="djamb" d="${caps}"/>${grab}</g>`;
+  }
+  return `<g class="door${outer ? ' outer' : ''}" ${attrs}><rect class="dgap" ${band}/>${grab}</g>`;
+}
+function doorSwingSVG(d, cls = '') {
+  if (d.opening) return '';
+  const across = d.w >= d.h, len = across ? d.w : d.h, t = DOOR_T / 2, s = d.swing & 1 ? -1 : 1, end = d.swing & 2;
+  let leaf, arc;
+  if (across) {
+    const Y = d.y + t, hx = end ? d.x + d.w : d.x, ox = end ? d.x : d.x + d.w;
+    leaf = `M${hx} ${Y}V${Y + s * len}`;
+    arc = `M${hx} ${Y + s * len}A${len} ${len} 0 0 ${(ox > hx) == (s > 0) ? 0 : 1} ${ox} ${Y}`;
+  } else {
+    const X = d.x + t, hy = end ? d.y + d.h : d.y, oy = end ? d.y : d.y + d.h;
+    leaf = `M${X} ${hy}H${X + s * len}`;
+    arc = `M${X + s * len} ${hy}A${len} ${len} 0 0 ${(oy > hy) == (s > 0) ? 1 : 0} ${X} ${oy}`;
+  }
+  return `<g class="dsw${cls}" aria-hidden="true"><path class="dswing" d="${arc}"/><path class="dleaf" d="${leaf}"/></g>`;
+}
+// The room a door swings into (by the middle of its swing), or undefined (then it's drawn under every room)
+function swingRoom(d, rooms) {
+  if (d.opening) return;
+  const across = d.w >= d.h, len = across ? d.w : d.h, t = DOOR_T / 2, s = d.swing & 1 ? -1 : 1;
+  const x = across ? d.x + d.w / 2 : d.x + t + s * len / 2, y = across ? d.y + t + s * len / 2 : d.y + d.h / 2;
+  return rooms.find(r => pointIn(ptsOf(r), x, y))?.id;
+}
+
 // After an edit: tidy the outline, and go back to a plain rectangle when that's what it is
 function settleShape(r) {
   if (!r.pts) return;
@@ -464,7 +555,7 @@ function fitToOutline(map) {
   const o = houseOutline(map);
   if (!o) return 0;
   let n = 0;
-  map.rooms.filter(r => r.floor != map.ground && !isOutside(r.floor)).forEach(r => {
+  map.rooms.filter(r => r.floor != map.ground && !isOutside(r.floor) && !isDoor(r)).forEach(r => {
     if (r.pts) {
       const c = cleanPts(r.pts.map(([x, y]) => [clampN(x, o.x, o.x + o.w), clampN(y, o.y, o.y + o.h)]));
       const bx = boxOf(c);
@@ -496,12 +587,17 @@ function rebuildRooms() {
   fitToOutline(MAP);     // older maps may have rooms past the walls; shown fitted, saved fitted on the next map save
   const y = MAP.yard || {};
   BUILTIN_ROOMS = [BUILTIN_ROOMS[0], ['yard', (y.name || '').trim() || 'Yard & exterior', y.emoji || '🌳', null]];
-  ROOMS = [...BUILTIN_ROOMS, ...MAP.rooms.filter(r => !isFeature(r)).map(r => [r.id, r.name, r.emoji || '🚪', r.floor])];
+  ROOMS = [...BUILTIN_ROOMS, ...MAP.rooms.filter(r => !isFeature(r) && !isYardArea(r)).map(r => [r.id, r.name, r.emoji || '🚪', r.floor])];
 }
 
 const isRoom = r => ROOMS.some(x => x[0] == r);
 const floorName = id => (MAP.floors.find(f => f.id == id) || { name: '' }).name;
 const LEGACY_ROOMS = { laundry: 'basement' };    // rooms that were renamed
+// A stored room id as it counts now: renamed rooms move on, and a yard area counts as the yard
+function canonRoom(r) {
+  r = LEGACY_ROOMS[r] || r;
+  return r && isYardArea(MAP.rooms.find(x => x.id == r)) ? 'yard' : r;
+}
 
 // Best guess from the project name until you pick a room yourself
 const ROOM_GUESS = [
@@ -521,20 +617,19 @@ const ROOM_GUESS = [
 function guessRoom(p) {
   const name = (p || '').toLowerCase();
   const byName = MAP.rooms.find(r => !isFeature(r) && r.name && name.includes(r.name.toLowerCase().replace(/s$/, '')));
-  if (byName) return byName.id;
+  if (byName) return isYardArea(byName) ? 'yard' : byName.id;
   const m = ROOM_GUESS.find(([, re]) => re.test(p || ''));
   return m && isRoom(m[0]) ? m[0] : 'house';
 }
 
 function roomFor(p) {
-  const stored = (ST.rooms || {})[p];
-  const r = LEGACY_ROOMS[stored] || stored;
+  const r = canonRoom((ST.rooms || {})[p]);
   return isRoom(r) ? r : guessRoom(p);
 }
 
 // The room a task counts toward: its own, if set, else its project's
 function taskRoom(t) {
-  const r = LEGACY_ROOMS[t.room] || t.room;
+  const r = canonRoom(t.room);
   return r && isRoom(r) ? r : roomFor(t.project);
 }
 
@@ -554,7 +649,7 @@ function roomOpts(sel) {
 // ?room=kitchen on the Board shows only that room's projects (links from the Home map).
 // Checked against the map once settings have loaded.
 const ROOM_PARAM = new URLSearchParams(location.search).get('room');
-const roomQ = () => (ROOM_PARAM && isRoom(ROOM_PARAM) ? ROOM_PARAM : null);
+const roomQ = () => (ROOM_PARAM && isRoom(canonRoom(ROOM_PARAM)) ? canonRoom(ROOM_PARAM) : null);
 // ?project=kitchen and ?label=quarterly (links from Settings) show just that project / label; capitals don't matter
 const PROJECT_PARAM = (new URLSearchParams(location.search).get('project') || '').trim().toLowerCase();
 const LABEL_PARAM = (new URLSearchParams(location.search).get('label') || '').trim().toLowerCase();
@@ -578,6 +673,21 @@ const labelLink = g => `/board/?label=${encodeURIComponent(g.toLowerCase())}`;
 
 // Settings > Miscellaneous values (with defaults)
 function spawnDays() { return Number.isFinite(+ST.spawnDays) ? +ST.spawnDays : 7; }
+function showDays() { return Number.isFinite(+ST.showDays) ? +ST.showDays : 7; }
+
+/* ---- upcoming window: Board and Home show only ToDo tasks due within showDays() (overdue included); Doing and
+   Done always show. Calendar, Stats and Settings show everything. ?all=1 on the Board shows every task. ---- */
+const SHOW_ALL = new URLSearchParams(location.search).get('all') === '1';
+let LATER = 0;                 // tasks the window hid on this render (after the other filters)
+const dayIn = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
+const upcoming = t => t.status != 'backlog' || t.due <= dayIn(showDays());
+const windowed = () => V === 'home' || (V === 'board' && !SHOW_ALL);
+function allLink(on) {
+  const u = new URL(location.href);
+  on ? u.searchParams.set('all', '1') : u.searchParams.delete('all');
+  return esc(u.pathname + u.search);
+}
+const dueSoon = () => (n => n == 0 ? 'due today' : n == 1 ? 'due by tomorrow' : `due in the next ${n} days`)(showDays());
 function dueWarn() {
   return { y: Number.isFinite(+ST.dueYellow) ? +ST.dueYellow : 14, o: Number.isFinite(+ST.dueOrange) ? +ST.dueOrange : 7 };
 }
@@ -691,7 +801,9 @@ function draw() {
   if (V === 'board' && roomQ()) L = L.filter(t => taskRoom(t) === roomQ());
   if (V === 'board' && PROJECT_PARAM) L = L.filter(t => t.project.toLowerCase() === PROJECT_PARAM);
   if (V === 'board' && LABEL_PARAM) L = L.filter(t => lbls(t).some(g => g.toLowerCase() === LABEL_PARAM));
-  if (V === 'board' && RANK_PARAM) { const rs = roomStats(T, ''); L = L.filter(t => roomLevel(rs[taskRoom(t)]) === RANK_PARAM); }
+  if (V === 'board' && RANK_PARAM) { const rs = roomStats(T.filter(upcoming), ''); L = L.filter(t => roomLevel(rs[taskRoom(t)]) === RANK_PARAM); }
+  LATER = 0;
+  if (windowed()) { const n = L.length; L = L.filter(upcoming); LATER = n - L.length; }
 
   if (V === 'home') home(L, q);
   else if (V === 'board') board(L, !q);
@@ -732,6 +844,8 @@ function board(L, showEmpty = true) {
   if (roomQ()) PJ = PJ.filter(p => roomFor(p) === roomQ() || L.some(t => t.project === p));
   if (PROJECT_PARAM) PJ = PJ.filter(p => p.toLowerCase() === PROJECT_PARAM);
   if (LABEL_PARAM || RANK_PARAM) PJ = PJ.filter(p => L.some(t => t.project === p));
+  // projects whose tasks are all due later stay off the Board (projects with no tasks yet still show)
+  if (!SHOW_ALL) PJ = PJ.filter(p => L.some(t => t.project === p) || !T.some(t => t.project === p));
 
   // Column headings with a colored divider and a task count; clicking one shows only that column
   let h = '<div class="head" role="group" aria-label="Show tasks by status">' + S.map(s =>
@@ -760,10 +874,13 @@ function board(L, showEmpty = true) {
     const [, name, c, range] = levelInfo(RANK_PARAM);
     h = `<div class="roombar">Showing tasks in rooms ranked <b class="rankchip" style="--rc:${c}">${name}</b> (${range.toLowerCase()})<a href="/board/">Show all tasks</a></div>` + h;
   }
+  if (SHOW_ALL) h = `<div class="roombar">Showing every task, however far off<a href="${allLink(false)}">Only what's ${dueSoon()}</a></div>` + h;
+  else if (LATER) h = `<div class="roombar"><span>Showing ToDo tasks <b>${dueSoon()}</b> · ${LATER} due later ${LATER == 1 ? 'is' : 'are'} on the <a href="/calendar/">Calendar</a></span><a href="${allLink(true)}">Show all</a></div>` + h;
   if (!PJ.length && STATUS_Q) h += `<p style="text-align:center;color:var(--mut);padding:30px;">No ${SL[STATUS_Q]} tasks here.</p>`;
+  else if (!PJ.length && LATER) h += `<p style="text-align:center;color:var(--mut);padding:30px;">Nothing ${dueSoon()}.</p>`;
   else if (!PJ.length) h += '<p style="text-align:center;color:var(--mut);padding:30px;">Nothing here yet. Click “New” to create a project or task, or “Import” to load a CSV.</p>';
 
-  const filtered = !showEmpty || !!(STATUS_Q || roomQ() || PROJECT_PARAM || LABEL_PARAM || RANK_PARAM);
+  const filtered = !showEmpty || !!(SHOW_ALL || STATUS_Q || roomQ() || PROJECT_PARAM || LABEL_PARAM || RANK_PARAM);
   pjDefaults(filtered);
   PJ.forEach((p, i) => {
     const pt = L.filter(t => t.project == p);
@@ -817,13 +934,13 @@ function savePjOpen() {
 function pjDefaults(filtered) {
   if (filtered || !T.length) return;
   const all = projs(T, true);
-  if (!Array.isArray(FIRST_OPEN)) FIRST_OPEN = all.filter(p => T.some(t => t.project == p && t.status != 'done')).slice(0, OPEN_FIRST);
+  if (!Array.isArray(FIRST_OPEN)) FIRST_OPEN = all.filter(p => T.some(t => t.project == p && t.status != 'done' && upcoming(t))).slice(0, OPEN_FIRST);
   let changed = false;
   all.forEach(p => { if (!(p in PJ_OPEN)) { PJ_OPEN[p] = FIRST_OPEN.includes(p); changed = true; } });
   if (changed) savePjOpen();
 }
 const pjIsOpen = (p, filtered) => (filtered ? PJ_OPEN_F[p] !== false : !!PJ_OPEN[p]);
-const boardFiltered = () => !!(filterQ() || STATUS_Q || roomQ() || PROJECT_PARAM || LABEL_PARAM || RANK_PARAM);
+const boardFiltered = () => !!(filterQ() || SHOW_ALL || STATUS_Q || roomQ() || PROJECT_PARAM || LABEL_PARAM || RANK_PARAM);
 
 function setPjOpen(p, open) {
   if (boardFiltered()) PJ_OPEN_F[p] = open;
@@ -1397,6 +1514,10 @@ function miscUI() {
     ${row('When the next copy appears', 'After you finish a recurring task, its next ToDo card is added this many days before it is due.',
       `${num('spawnDays', spawnDays(), 0, 90)}<span>days before</span>`)}
 
+    <div class="pgroup">Board &amp; Home</div>
+    ${row('How far ahead to show', 'The Board and the Home map show ToDo tasks due within this many days (overdue ones too). Tasks due later stay on the Calendar and in Settings › Tasks.',
+      `${num('showDays', showDays(), 0, 365)}<span>days ahead</span>`)}
+
     <div class="pgroup">Due date colors</div>
     ${row('Card warning colors', 'Cards that are due today or overdue are always red.',
       `<span class="dot dy"></span>${num('dueYellow', w.y, 1, 90)}<span>days</span><span class="dot do"></span>${num('dueOrange', w.o, 1, 90)}<span>days</span>`)}
@@ -1524,7 +1645,7 @@ const PENCIL_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" 
 
 function taskRoomOpts(t) {
   const [, n, e] = roomInfo(roomFor(t.project));
-  return `<option value="">Project's (${e} ${esc(n)})</option>` + roomOpts(isRoom(t.room) ? t.room : null);
+  return `<option value="">Project's (${e} ${esc(n)})</option>` + roomOpts(isRoom(canonRoom(t.room)) ? canonRoom(t.room) : null);
 }
 
 function sched(L) {
@@ -1972,6 +2093,8 @@ async function svTask(another) {
   load();
   if (another && !cur) readyForNext(t.title);
   else $('d').close();
+  if (windowed() && !upcoming(t))
+    ask({ title: 'Saved for later', message: `It's due ${fmtDate(t.due)}, so it shows on the ${V == 'home' ? 'Home map' : 'Board'} from ${showDays() ? `${showDays()} days before then` : 'that day'}. Until then it's on the Calendar and in Settings › Tasks.`, ok: 'OK', info: true, icon: '📅' });
 }
 
 async function svProject(another) {
@@ -2397,14 +2520,15 @@ const tierOf = n => {
 
 /* ---- room moods: how a room feels at its rank ----
    Perfect and Thriving: a sunny glow and twinkling sparkles (the reward). Livable and Neutral: a lamp's warm,
-   gently flickering light (cozy). Slacking: heat and rising bubbles. Neglected: a rolling boil, with faster,
-   bigger bubbles, steam and a pulsing edge (see MOODS). Everything is clipped to the room's outline, sits under
+   gently flickering light (cozy). Slacking: heat and smoky fumes rising off the floor. Neglected: thicker,
+   faster fumes, bricks falling from the ceiling (a puff of dust where each lands) and a pulsing edge (see MOODS). Everything is clipped to the room's outline, sits under
    its label, and stands still with prefers-reduced-motion (style.css). */
 const MOOD_DEF = `<radialGradient id="mood-lamp"><stop offset="0" stop-color="#ffd27a" stop-opacity=".55"/><stop offset=".55" stop-color="#ffc35a" stop-opacity=".18"/><stop offset="1" stop-color="#ffb347" stop-opacity="0"/></radialGradient>
   <radialGradient id="mood-sun"><stop offset="0" stop-color="#fff3c4" stop-opacity=".5"/><stop offset=".6" stop-color="#c8f5d8" stop-opacity=".14"/><stop offset="1" stop-color="#c8f5d8" stop-opacity="0"/></radialGradient>
   <radialGradient id="mood-hot" cy="1" r="1"><stop offset="0" stop-color="#ff8a3d" stop-opacity=".5"/><stop offset="1" stop-color="#ff8a3d" stop-opacity="0"/></radialGradient>
-  <radialGradient id="mood-boil" cy="1" r="1.1"><stop offset="0" stop-color="#ff3b4a" stop-opacity=".6"/><stop offset=".7" stop-color="#ff6a3d" stop-opacity=".18"/><stop offset="1" stop-color="#ff6a3d" stop-opacity="0"/></radialGradient>`;
-// the same room always gets the same sparkles and bubbles, so a redraw doesn't reshuffle them
+  <radialGradient id="mood-boil" cy="1" r="1.1"><stop offset="0" stop-color="#ff3b4a" stop-opacity=".6"/><stop offset=".7" stop-color="#ff6a3d" stop-opacity=".18"/><stop offset="1" stop-color="#ff6a3d" stop-opacity="0"/></radialGradient>
+  <radialGradient id="mood-fume"><stop offset="0" stop-color="#d4d7cf" stop-opacity=".8"/><stop offset=".55" stop-color="#b3b7ad" stop-opacity=".38"/><stop offset="1" stop-color="#a9ada4" stop-opacity="0"/></radialGradient>`;
+// the same room always gets the same sparkles, fumes and bricks, so a redraw doesn't reshuffle them
 function seeded(str) {
   let h = 2166136261;
   for (const ch of String(str)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
@@ -2418,8 +2542,8 @@ const MOODS = {
   thriving: ['sun', 2, 0, ''],
   livable: ['lamp', 0, 2, ''],     // cozy lamplight with drifting motes
   neutral: ['lamp', 0, 0, ''],
-  slacking: ['', 0, 0, 'hot'],     // heat and rising bubbles
-  neglected: ['', 0, 0, 'boil'],   // a rolling boil, steam, a pulsing edge
+  slacking: ['', 0, 0, 'hot'],     // heat and fumes
+  neglected: ['', 0, 0, 'boil'],   // thick fumes, falling bricks, a pulsing edge
 };
 function moodSVG(r, key) {
   const [glow, sparks, motes, heat] = MOODS[key] || MOODS.neutral;
@@ -2447,17 +2571,22 @@ function moodSVG(r, key) {
   if (heat) {
     const boil = heat == 'boil';
     fx += `<rect class="heat${boil ? ' boil' : ''}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="url(#mood-${heat})"/>`;
-    const n = Math.max(3, Math.min(boil ? 14 : 7, Math.round(b.w / (boil ? 22 : 38) / k)));
+    // smoky fumes rising off the floor, swelling and thinning out as they go
+    const n = Math.max(2, Math.min(boil ? 7 : 5, Math.round(b.w / (boil ? 40 : 60) / k)));
     for (let i = 0; i < n; i++) {
-      const x = r1(b.x + b.w * (i + 0.2 + rnd() * 0.6) / n), rr = r1((boil ? 3 + rnd() * 5 : 2.5 + rnd() * 3) * k);
-      const d = boil ? 1.2 + rnd() * 1.1 : 2.6 + rnd() * 1.6;
-      fx += `<circle class="bub" cx="${x}" cy="${r1(b.y + b.h - rr - 2)}" r="${rr}" style="--d:${r1(d)}s;--dl:${r1(-rnd() * d)}s;--rise:${r1(-(b.h * (0.55 + rnd() * 0.35)))}px;--sx:${r1((rnd() - 0.5) * 10 * k)}px"/>`;
+      const x = r1(b.x + b.w * (i + 0.2 + rnd() * 0.6) / n), rr = r1((boil ? 13 + rnd() * 8 : 10 + rnd() * 6) * k);
+      const d = boil ? 3 + rnd() * 1.5 : 4.5 + rnd() * 2;
+      fx += `<circle class="fume" cx="${x}" cy="${r1(b.y + b.h - rr * 0.4)}" r="${rr}" fill="url(#mood-fume)" style="--d:${r1(d)}s;--dl:${r1(-rnd() * d)}s;--rise:${r1(-(b.h * (0.5 + rnd() * 0.3)))}px;--sx:${r1((rnd() - 0.5) * 24 * k)}px"/>`;
     }
     if (boil) {
-      // steam curling off the top, and the walls pulse
-      for (let i = 0; i < 3; i++) {
-        const x = r1(b.x + b.w * (0.25 + i * 0.25) + (rnd() - 0.5) * 10), y = r1(b.y + Math.min(b.h * 0.45, 46 * k)), q = r1(7 * k), hh = r1(Math.min(b.h * 0.35, 34 * k));
-        fx += `<path class="steam" d="M${x} ${y}q${-q} ${r1(-hh / 3)} 0 ${r1(-hh * 2 / 3)}t0 ${r1(-hh / 3)}" style="--dl:${r1(-i * 0.9 - rnd())}s"/>`;
+      // bricks dropping from the ceiling, each with a puff of dust where it lands; and the walls pulse
+      const nb = Math.max(2, Math.min(5, Math.round(b.w / 70 / k))), bw = r1(20 * k), bh = r1(10 * k);
+      for (let i = 0; i < nb; i++) {
+        const x = r1(b.x + b.w * (i + 0.2 + rnd() * 0.6) / nb - bw / 2), d = 2.6 + rnd() * 1.6;
+        const v = `--d:${r1(d)}s;--dl:${r1(-rnd() * d)}s`, fall = r1(b.h - 2);
+        fx += `<g class="brick" style="${v};--fall:${fall}px;--rot:${Math.round((rnd() - 0.5) * 50)}deg"><rect x="${x}" y="${r1(b.y - bh)}" width="${bw}" height="${bh}" rx="1.2"/>` +
+          `<path d="M${r1(x + bw / 2)} ${r1(b.y - bh)}v${r1(bh / 2)}M${x} ${r1(b.y - bh / 2)}h${bw}"/></g>` +
+          `<ellipse class="dust" cx="${r1(x + bw / 2)}" cy="${r1(b.y + b.h - 3 * k)}" rx="${r1(16 * k)}" ry="${r1(6 * k)}" fill="url(#mood-fume)" style="${v}"/>`;
       }
       fx += shapeSVG(r).replace(/^<(rect|polygon)/, '<$1 class="edge"');
     }
@@ -2739,6 +2868,8 @@ const rotBox = b => ({ x: PLAN_H - b.y - b.h, y: b.x, w: b.h, h: b.w });
 function rotItem(r) {
   const o = { ...r, ...rotBox(r) };
   if (r.pts) o.pts = r.pts.map(([x, y]) => [PLAN_H - y, x]);
+  // a door's swing turns too: across a wall, down becomes left (side flips); up a wall, the top end becomes the right one
+  if (isDoor(r)) o.swing = (r.swing || 0) ^ (r.w >= r.h ? 1 : 2);
   return o;
 }
 let HOME_ROT = null;               // the layout Home was last drawn for (redraw when the phone turns)
@@ -2767,7 +2898,7 @@ function homePlan(L, q) {
 
   // to-do count per floor for the tabs (the yard counts toward the ground floor)
   const counts = {};
-  MAP.floors.forEach(f => { counts[f.id] = MAP.rooms.filter(r => r.floor == f.id && !isFeature(r)).reduce((n, r) => n + HOME[r.id].backlog, 0); });
+  MAP.floors.forEach(f => { counts[f.id] = MAP.rooms.filter(r => r.floor == f.id && !isFeature(r) && !isYardArea(r)).reduce((n, r) => n + HOME[r.id].backlog, 0); });
   const yardFloor = MAP.floors.some(f => isOutside(f.id)) ? OUT : MAP.ground;
   counts[yardFloor] = (counts[yardFloor] || 0) + HOME.yard.backlog;
 
@@ -2775,9 +2906,19 @@ function homePlan(L, q) {
   const blockedHere = MAP.rooms.filter(r => isBlocked(r) && r.floor == fid);
   const stairsHere = MAP.rooms.filter(r => isStairs(r) && r.floor == fid);
   const stairsGhost = MAP.rooms.filter(r => isStairs(r) && r.to == fid);
+  const doorsHere = MAP.rooms.filter(r => isDoor(r) && r.floor == fid);
   const fp = houseOutline();             // the same outer walls on every floor, so floors line up
-  const rooms = onFloor.map(r => {
-    return `<g ${attrs(r.id)}>${shapeSVG(r)}${moodSVG(r, roomLevel(HOME[r.id]))}` +
+  // each door's swing goes in the room it opens into, under that room's walls and label
+  const swingIn = {}, looseSwings = doorsHere.map(d => {
+    const k = swingRoom(d, onFloor);
+    if (k === undefined) return doorSwingSVG(d);
+    swingIn[k] = (swingIn[k] || '') + doorSwingSVG(d);
+    return '';
+  }).join('');
+  const rooms = isOutside(fid) ? '' : onFloor.map(r => {
+    // the walls go over the room's glow (which would lighten them), so every inner wall is the same color
+    return `<g ${attrs(r.id)}>${shapeSVG(r)}${moodSVG(r, roomLevel(HOME[r.id]))}${swingIn[r.id] ? `<g class="doors">${swingIn[r.id]}</g>` : ''}` +
+      `<g class="rwall">${shapeSVG(r)}</g>` +
       roomLabelSVG({ ...r, ...labelBox(r) }, todo(r.id), HOME[r.id].backlog || '✓') + '</g>';
   }).join('');
 
@@ -2794,10 +2935,12 @@ function homePlan(L, q) {
   const empty = onFloor.length || stairsHere.length || blockedHere.length ? ''
     : `<text class="planempty" x="${fp ? fp.x + fp.w / 2 : PW / 2}" y="${fp ? fp.y + fp.h / 2 : PH / 2}">No rooms on this floor yet. Use Edit map to add some.</text>`;
   const house = (fp
-    ? `<rect class="floor" x="${fp.x}" y="${fp.y}" width="${fp.w}" height="${fp.h}"/>${rooms}` +
+    ? `<rect class="floor" x="${fp.x}" y="${fp.y}" width="${fp.w}" height="${fp.h}"/>` +
+      (looseSwings ? `<g class="doors">${looseSwings}</g>` : '') + rooms +
       blockedHere.map(bk => blockedSVG(bk)).join('') +
       stairsLayerSVG([...stairsGhost.map(st => ({ st, ghost: true })), ...stairsHere.map(st => ({ st, ghost: false }))]) +
-      `<rect class="walls" x="${fp.x}" y="${fp.y}" width="${fp.w}" height="${fp.h}"/>`
+      `<rect class="walls" x="${fp.x}" y="${fp.y}" width="${fp.w}" height="${fp.h}"/>` +
+      (doorsHere.length ? `<g class="doors" aria-hidden="true">${doorsHere.map(d => doorSVG(d)).join('')}</g>` : '')
     : '') + empty;
   const vb = crop ? `${fp.x - 14} ${fp.y - 14} ${fp.w + 28} ${fp.h + 28}` : `0 0 ${PW} ${PH}`;
   const svg = `<svg class="plan${ROT ? ' turned' : ''}" viewBox="${vb}" role="img" aria-label="${esc(floorName(fid))} map${ROT ? ' (turned to fit the screen)' : ''}"><defs>${HATCH_DEF}${MOOD_DEF}</defs>${background}${house}</svg>`;
@@ -2808,8 +2951,12 @@ function homePlan(L, q) {
 function homeOutside(L, q, { fid, counts, onFloor, treesHere, attrs, todo, color }) {
   const ob = ROT ? rotBox(outBounds(MAP_UP, HOME_HEAD)) : outBounds(MAP, HOME_HEAD), hb = houseOutline(), [, yn, ye] = roomInfo('yard');
   TS = 1.6;
-  const item = r => `<g ${attrs(r.id).replace('class="room"', `class="room ${isStructure(r) ? 'structure' : 'area'}"`)}>${shapeSVG(r)}` +
-    moodSVG(r, roomLevel(HOME[r.id])) + roomLabelSVG({ ...r, ...labelBox(r) }, todo(r.id), HOME[r.id].backlog || '✓') + '</g>';
+  // a yard area is part of the yard: it opens the yard, shares its rank, and shows just its name (the count is the yard's)
+  const item = r => { const k = isYardArea(r) ? 'yard' : r.id;
+    // (the yard is one stop for Tab, not one per area)
+    const at = attrs(k).replace('class="room"', `class="room ${isStructure(r) ? 'structure' : 'area'}"`).replace('tabindex="0"', k == 'yard' ? 'tabindex="-1"' : 'tabindex="0"');
+    return `<g ${at}>${shapeSVG(r)}` +
+    moodSVG(r, roomLevel(HOME[k])) + (isStructure(r) ? `<g class="rwall">${shapeSVG(r)}</g>` : '') + (k == 'yard' ? roomLabelSVG({ ...r, ...labelBox(r) }, '') : roomLabelSVG({ ...r, ...labelBox(r) }, todo(k), HOME[k].backlog || '✓')) + '</g>'; };
   const areas = onFloor.filter(r => !isStructure(r)).map(item).join(''), sheds = onFloor.filter(isStructure).map(item).join('');
   const house = hb ? houseBlockSVG(hb, attrs('house').replace('class="room" ', ''), todo('house'), HOME.house.backlog || '✓', ' room') : '';
   const yard = `<g ${attrs('yard')}><rect class="yard" x="${ob.x}" y="${ob.y}" width="${ob.w}" height="${ob.h}" rx="28"/></g>`;
@@ -2889,7 +3036,7 @@ function homePage(svg, fid, counts, q, color, todo) {
     '<li><span class="sw blocksw"></span>Blocked off<small>Not a room</small></li>';
   // Whole house: the overall rank, from every ToDo task in the home (all rooms, the yard and the house itself)
   const [, hn, he] = roomInfo('house'), total = ROOMS.reduce((n, [r]) => n + (HOME[r] ? HOME[r].backlog : 0), 0);
-  const hl = levelInfo(tierOf(total)), own = HOME.house.backlog;
+  const hl = levelInfo(tierOf(total));
   const legendOpen = LEGEND_OPEN;
 
   const m = $('m');
@@ -2904,13 +3051,13 @@ function homePage(svg, fid, counts, q, color, todo) {
     <aside class="hside">
       <a class="hcard" href="/board/" data-tier="${hl[0]}" style="--rc:${hl[2]}" title="Overall rank: ${hl[1]} (${hl[3].toLowerCase()}). Open the Board">
         <span class="hc-e">${he}</span>
-        <span><b>${hn}</b> <span class="hrank">${hl[1]}</span><small>${total} to do across the home${own ? ` · ${own} not tied to one room` : ''}</small></span>
+        <span><b>${hn}</b> <span class="hrank">${hl[1]}</span><small>${total} to do across the home, ${dueSoon()}</small></span>
         <span class="hc-n">${total}<small>to do</small></span>
       </a>
       <details class="stats-card legendbox"${legendOpen ? ' open' : ''} ontoggle="LEGEND_OPEN = this.open">
         <summary><h3>Legend</h3><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary>
         <ul class="legend">${legend}</ul>
-        <p class="note">Colors rank each room's <b>ToDo</b> tasks${q ? ` matching “${esc(q)}”` : ''}. ${matchMedia('(hover: none)').matches ? 'Tap a room for details; tap it again to open its tasks on the Board.' : 'Hover a room for details; click it to open its tasks on the Board.'} Set a project's room in <a href="/settings/projects/">Settings › Projects</a>, or a single task's room when you edit it.</p>
+        <p class="note">Colors rank each room's <b>ToDo</b> tasks ${dueSoon()}${q ? ` matching “${esc(q)}”` : ''} (overdue included; later ones wait on the <a href="/calendar/">Calendar</a>). ${matchMedia('(hover: none)').matches ? 'Tap a room for details; tap it again to open its tasks on the Board.' : 'Hover a room for details; click it to open its tasks on the Board.'} Set a project's room in <a href="/settings/projects/">Settings › Projects</a>, or a single task's room when you edit it.</p>
       </details>
       <div class="stats-card roomsbox"><div class="rhead"><h3>Rooms</h3><select id="rfilt" class="rfilt" aria-label="Show rooms" onchange="setRoomFilter(this.value)">${roomFilterOpts()}</select></div><div id="hrooms">${roomsListHTML()}</div></div>
     </aside>
@@ -2960,6 +3107,51 @@ function overlaps(a, b) {
 }
 // Stairs may overlap other stairs (an up flight and a down flight in one stairwell); anything else overlapping is flagged
 const edOverlapping = r => ED.map.rooms.some(o => overlaps(r, o) && !coexist(r, o)) || hitsHouse(r, ED.map);
+// Like edOverlapping, for a copy of a room too (a shape being tried out): matched by id, not by object
+const edBlocked = r => hitsHouse(r, ED.map) || ED.map.rooms.some(o => o.id !== r.id && overlaps(r, o) && !coexist(r, o));
+
+/* ---- wall snapping: rooms line up with each other and never overlap ----
+   While a room is dragged or resized, an edge that comes within WALL_SNAP of a neighbour's wall (or the
+   edge of the floor) jumps onto it, so walls meet exactly. Rooms that can't give way (edPush) stop the
+   room at their walls instead of being covered; it slides along them, like the house Outside. A room that
+   already overlapped something when the drag began (an older map) can still move, so it can be fixed. */
+const WALL_SNAP = 20;
+// x and y lines of the walls the room r could meet: the other items on its floor (as the drag began) and the bounds
+function wallLines(r, others, b) {
+  const xs = [b.x, b.x + b.w], ys = [b.y, b.y + b.h], h = isOutside(r.floor) && houseOutline(ED.map);
+  others.filter(o => !coexist(r, o)).concat(h ? [h] : []).forEach(o => ptsOf(o).forEach(([x, y]) => { xs.push(x); ys.push(y); }));
+  return { xs, ys };
+}
+// v moved onto the nearest line within WALL_SNAP (unchanged if there's none)
+function snapTo(v, lines) {
+  let best = v, gap = WALL_SNAP + 1;
+  lines.forEach(l => { if (Math.abs(l - v) < gap) { gap = Math.abs(l - v); best = l; } });
+  return best;
+}
+// A box's start a, moved so its start or end (a + len), whichever is closer, sits on a wall line
+function snapSpan(a, len, lines) {
+  const ds = [snapTo(a, lines) - a, snapTo(a + len, lines) - a - len].filter(Boolean).sort((p, q) => Math.abs(p) - Math.abs(q));
+  return a + (ds[0] || 0);
+}
+// Neighbours give way where they can (edPush); true if the room is then clear (or was stuck from the start)
+function edClear(r, d) {
+  edPush(r, d.others);
+  return !hitsHouse(r, ED.map) && (d.stuck || !edBlocked(r));
+}
+// From box A toward box B one grid step at a time (across, then down) while ok(box) allows: the last box it allowed
+function approach(A, B, ok) {
+  let cur = { ...A };
+  for (const ks of [['x', 'w'], ['y', 'h']]) {
+    const from = { ...cur }, n = Math.ceil(Math.max(...ks.map(k => Math.abs(B[k] - from[k]))) / GRID);
+    for (let i = 1; i <= n; i++) {
+      const c = { ...cur };
+      ks.forEach(k => { c[k] = i == n ? B[k] : from[k] + snap((B[k] - from[k]) * i / n); });
+      if (!ok(c)) break;
+      cur = c;
+    }
+  }
+  return cur;
+}
 
 function edFloor(id) {
   ED.floor = id;
@@ -2977,14 +3169,15 @@ function renderEditor() {
        <button type="button" class="edtreebtn" onclick="edAddTree()" title="A large tree: drawn over the yard, but not a place for tasks">🌳 + Add tree</button>`
     : `<button type="button" class="p edadd" onclick="edAdd()">+ Add room to ${esc(f.name)}</button>
        <button type="button" class="edstairsbtn" onclick="edAddStairs()" title="Stairs show solid on this floor and see-through on the floor they lead to">🪜 + Add stairs</button>
-       <button type="button" class="edblockbtn" onclick="edAddBlocked()" title="Space inside the walls that isn't a room or a hallway, e.g. over the garage">▨ + Block off an area</button>`;
+       <button type="button" class="edblockbtn" onclick="edAddBlocked()" title="Space inside the walls that isn't a room or a hallway, e.g. over the garage">▨ + Block off an area</button>
+       <button type="button" class="eddoorbtn" onclick="edAddDoor()" title="An opening in a wall. Drag it onto any wall: it snaps on and turns to match.">🚪 + Add door</button>`;
   m.innerHTML = `<div class="home editing">
     <div class="mapwrap">
       <div class="maphead">${floorTabs(ED.floor, 'edFloor')}<span class="edbadge">Editing</span></div>
       <svg id="edsvg" class="plan edplan${out ? ' outside' : ''}" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" role="application" aria-label="Map editor for ${esc(f.name)}" tabindex="-1"></svg>
       <p class="edhint">${out
         ? 'The house stays in the middle at its real size (edit it on the other tabs). Drag areas, structures and trees to move them; select one, then drag its corners ■ or walls ▬ to resize it. Click the open yard to rename it.'
-        : 'Drag a room to move it. Select it, then drag its corners ■ or walls ▬ to reshape it; ⊕ splits a wall so you can move just part of it. Space between rooms shows as hallway.'}
+        : 'Drag a room to move it. Select it, then drag its corners ■ or walls ▬ to reshape it; ⊕ splits a wall so you can move just part of it. Space between rooms shows as hallway. Drag a door onto any wall.'}
         <span class="kbdhint">Keyboard: Tab to ${out ? 'an item' : 'a room'}, arrows move it, Shift + arrows resize it, Delete removes it.</span></p>
     </div>
     <aside class="hside">
@@ -3059,7 +3252,26 @@ function edDrawSvg(focus) {
   };
   TS = out ? 1.6 : 1;
   // Outside: areas, then structures, then trees on top; the house in the middle can't be selected
+  // Blocked-off areas go over the rooms (as on Home), so one placed on a room can be seen and grabbed
   const order = r => (isStructure(r) ? 1 : 0);
+  // door swings go in the room they open into, between its fill and a copy of its outline (so walls and labels are on top)
+  const edSwing = {}, edLoose = rooms.filter(isDoor).map(dr => {
+    const sw = doorSwingSVG(dr, dr.id == ED.sel ? ' sel' : ''), k = swingRoom(dr, rooms.filter(r => !isFeature(r)));
+    if (k === undefined) return sw;
+    edSwing[k] = (edSwing[k] || '') + sw;
+    return '';
+  }).join('');
+  const doorG = dr => {
+    const sel = dr.id == ED.sel;
+    return doorSVG(dr, `data-rid="${esc(dr.id)}" tabindex="0" role="button" aria-label="${dr.opening ? 'Opening' : 'Door'}, ${Math.max(dr.w, dr.h)} wide${sel ? ', selected' : ''}"`, hs * 0.6, ED.map)
+      .replace('<g class="door', `<g class="edroom eddoor${sel ? ' sel' : ''} door`);      // (also "door opening")
+  };
+  // a door's ends: drag either one along the wall to make it wider or narrower
+  const doorHandles = dr => {
+    const a = dr.w >= dr.h, w = a ? hs * 0.8 : hs * 1.8, h = a ? hs * 1.8 : hs * 0.8, cx = dr.x + dr.w / 2, cy = dr.y + dr.h / 2;
+    return [a ? [dr.x, cy] : [cx, dr.y], a ? [dr.x + dr.w, cy] : [cx, dr.y + dr.h]].map(([x, y], i) =>
+      `<rect class="handle wall ${a ? 'vt' : 'hz'}" data-h="d:${i}" data-rid="${esc(dr.id)}" x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${hs * 0.4}"><title>Drag to resize</title></rect>`).join('');
+  };
   const treeG = t => {
     const sel = t.id == ED.sel;
     return treeSVG(t, `data-rid="${esc(t.id)}" tabindex="0" role="button" aria-label="Tree${t.name ? ': ' + esc(t.name) : ''}, ${t.w} by ${t.h}${sel ? ', selected' : ''}"`)
@@ -3071,22 +3283,25 @@ function edDrawSvg(focus) {
     <rect x="${vb.x}" y="${vb.y}" width="${vb.w}" height="${vb.h}" fill="url(#edgrid)" pointer-events="none"/>
     ${ground ? gardenSVG(fp, 'garden edgarden') : ''}
     ${fp && !out ? `<rect class="floor" x="${fp.x}" y="${fp.y}" width="${fp.w}" height="${fp.h}" pointer-events="none"/>` : ''}
+    ${edLoose}
+    ${rooms.filter(r => !isFeature(r)).sort((a, b) => order(a) - order(b)).map(r => {
+      const sel = r.id == ED.sel, kind = out ? (isStructure(r) ? ' structure' : ' area') : '';
+      return `<g class="edroom${kind}${sel ? ' sel' : ''}${edOverlapping(r) ? ' overlap' : ''}" data-rid="${esc(r.id)}" tabindex="0" role="button"
+          aria-label="${esc(r.name || 'Unnamed room')}, ${r.w} by ${r.h}${sel ? ', selected' : ''}">
+        ${shapeSVG(r)}${edSwing[r.id] ? `${edSwing[r.id]}<g class="edwall">${shapeSVG(r)}</g>` : ''}${roomLabelSVG({ ...r, ...labelBox(r) })}</g>`;
+    }).join('')}
     ${rooms.filter(isBlocked).map(bk => {
       const sel = bk.id == ED.sel;
       return blockedSVG(bk, `data-rid="${esc(bk.id)}" tabindex="0" role="button" aria-label="Blocked-off area${bk.name ? ': ' + esc(bk.name) : ''}, ${bk.w} by ${bk.h}${sel ? ', selected' : ''}"`)
         .replace('<g class="blocked"', `<g class="edroom edblocked${sel ? ' sel' : ''}${edOverlapping(bk) ? ' overlap' : ''} blocked"`);
     }).join('')}
-    ${rooms.filter(r => !isFeature(r)).sort((a, b) => order(a) - order(b)).map(r => {
-      const sel = r.id == ED.sel, kind = out ? (isStructure(r) ? ' structure' : ' area') : '';
-      return `<g class="edroom${kind}${sel ? ' sel' : ''}${edOverlapping(r) ? ' overlap' : ''}" data-rid="${esc(r.id)}" tabindex="0" role="button"
-          aria-label="${esc(r.name || 'Unnamed room')}, ${r.w} by ${r.h}${sel ? ', selected' : ''}">
-        ${shapeSVG(r)}${roomLabelSVG({ ...r, ...labelBox(r) })}</g>`;
-    }).join('')}
     ${out && fp ? houseBlockSVG(fp, 'pointer-events="none"') : ''}
     ${rooms.filter(isTree).map(treeG).join('')}
     ${edStairsLayer(rooms.filter(isStairs), ghosts)}
     ${fp && !out ? `<rect class="walls" x="${fp.x}" y="${fp.y}" width="${fp.w}" height="${fp.h}" pointer-events="none"/>` : ''}
-    ${ED.sel && edRoom(ED.sel) && (edRoom(ED.sel).floor == ED.floor || (isStairs(edRoom(ED.sel)) && edRoom(ED.sel).to == ED.floor))
+    ${rooms.filter(isDoor).map(doorG).join('')}
+    ${ED.sel && isDoor(edRoom(ED.sel)) && edRoom(ED.sel).floor == ED.floor ? doorHandles(edRoom(ED.sel)) : ''}
+    ${ED.sel && edRoom(ED.sel) && !isDoor(edRoom(ED.sel)) && (edRoom(ED.sel).floor == ED.floor || (isStairs(edRoom(ED.sel)) && edRoom(ED.sel).to == ED.floor))
       ? (isStairs(edRoom(ED.sel)) || isTree(edRoom(ED.sel)) ? handles(edRoom(ED.sel)) : shapeHandles(edRoom(ED.sel))) : ''}
     ${rooms.length ? '' : `<text class="planempty" x="${vb.x + vb.w / 2}" y="${out ? vb.y + 50 : vb.y + vb.h / 2}"${tsStyle(18)}>${out ? 'Nothing outside yet. Add a yard area, a structure, or a tree.' : 'Empty floor. Use “+ Add room” to start.'}</text>`}`;
   TS = 1;
@@ -3142,7 +3357,9 @@ function edDrawPanel() {
   const box = $('ed-room');
   if (!box) return;
   const r = ED.sel && edRoom(ED.sel);
-  const warn = edRooms().some(edOverlapping) ? `<p class="note edwarn">Some ${isOutside(ED.floor) ? 'items overlap each other or the house' : 'rooms overlap'} (outlined in red). Drag them apart before saving.</p>` : '';
+  // name what overlaps, so it's clear what to drag apart (or select and delete)
+  const clash = edRooms().filter(edOverlapping).map(r => isBlocked(r) ? 'a blocked-off area' : isStairs(r) ? 'stairs' : isTree(r) ? 'a tree' : esc(r.name || 'an unnamed room'));
+  const warn = clash.length ? `<p class="note edwarn">${[...new Set(clash)].join(', ').replace(/, ([^,]*)$/, ' and $1').replace(/^./, c => c.toUpperCase())} overlap${isOutside(ED.floor) ? ' (each other or the house)' : ''}, outlined in red. Drag them apart, or select one and delete it, before saving.</p>` : '';
   if (!r && isOutside(ED.floor)) {             // the open yard: everything outside the house that isn't in an area
     const y = ED.map.yard || {}, cur = y.emoji || '🌳';
     box.innerHTML = `<div class="edsel">
@@ -3157,7 +3374,7 @@ function edDrawPanel() {
     return;
   }
   if (!r) {
-    box.innerHTML = '<p class="note">Select a room, stairs, or blocked-off area to change or delete it.</p>' + warn;
+    box.innerHTML = '<p class="note">Select a room, stairs, door, or blocked-off area to change or delete it.</p>' + warn;
     return;
   }
   if (isTree(r)) {
@@ -3180,6 +3397,23 @@ function edDrawPanel() {
       <p class="note" id="ed-size">${r.w} × ${r.h}${edOverlapping(r) ? ' · <span class="edwarn">overlaps a room</span>' : ''}</p>
       ${shapeHint(r)}
       <button type="button" class="red" onclick="edDelete('${esc(r.id)}')">Delete area</button>
+    </div>`;
+    return;
+  }
+  if (isDoor(r)) {
+    const what = r.opening ? 'opening' : 'door';
+    box.innerHTML = `<div class="edsel">
+      <p class="edstitle">${r.opening ? '↔ Opening' : '🚪 Door'}</p>
+      <div class="seg eddtype" role="group" aria-label="Door or opening">
+        <button type="button" class="${r.opening ? '' : 'on'}" aria-pressed="${!r.opening}" onclick="edDoorType(false)">🚪 Door</button>
+        <button type="button" class="${r.opening ? 'on' : ''}" aria-pressed="${!!r.opening}" onclick="edDoorType(true)">↔ Opening</button>
+      </div>
+      <p class="note">Drag it onto any wall (between rooms, to a hallway, or the outside wall): it snaps on and turns to match. Drag either end ■ to resize it.${r.opening ? ' An opening is a gap in the wall with no door.' : ''}</p>
+      <p class="note" id="ed-size">${Math.max(r.w, r.h)} wide</p>
+      <div class="edbtnrow">
+        ${r.opening ? '' : '<button type="button" onclick="edDoorFlip()" title="Which way it opens (keyboard: R)">⇄ Flip swing</button>'}
+        <button type="button" class="red" onclick="edDelete('${esc(r.id)}')">Delete ${what}</button>
+      </div>
     </div>`;
     return;
   }
@@ -3210,6 +3444,7 @@ function edDrawPanel() {
       ${iconGrid(r.emoji, 'edIcon')}
       <p class="note" id="ed-size">${r.w} × ${r.h}${edOverlapping(r) ? ` · <span class="edwarn">overlaps ${hitsHouse(r, ED.map) ? 'the house' : 'another ' + what.toLowerCase()}</span>` : ''}</p>
       ${shapeHint(r)}
+      ${isYardArea(r) ? `<p class="note">Part of ${esc((ED.map.yard || {}).name || 'Yard & exterior')}: its tasks count toward the yard.</p>` : ''}
       <button type="button" class="red" onclick="edDelete('${esc(r.id)}')">Delete ${what.toLowerCase()}</button>
     </div>`;
 }
@@ -3271,7 +3506,9 @@ function edDown(e) {
   }
   ED.drag = { kind: h ? h.dataset.h : 'move', start: edPoint(e), orig: { ...r }, id: e.pointerId, others: edSnapshot(r),
               bounds: roomBounds(r, ED.map), view: viewOf(ED.floor, ED.map), wasSel, at: [e.clientX, e.clientY], moved: false,
-              last: { x: r.x, y: r.y, w: r.w, h: r.h } };      // last spot clear of the house (Outside)
+              last: { x: r.x, y: r.y, w: r.w, h: r.h },       // last spot clear of the house and the other rooms
+              stuck: !isTree(r) && edBlocked(r) };              // overlapping already (an older map): free to move out
+  ED.drag.lines = wallLines(r, ED.drag.others, ED.drag.bounds);
   if (/^[ev]:/.test(hk)) {                          // a wall or corner of a room's outline
     const P = ptsOf(r).map(q => [...q]);
     let idx = +hk.slice(2);
@@ -3294,6 +3531,21 @@ function edMove(e) {
   const p = edPoint(e), d = ED.drag, o = d.orig, r = edRoom(ED.sel);
   const dx = snap(p.x - d.start.x), dy = snap(p.y - d.start.y);
   const b = d.bounds;
+  if (isDoor(r)) {
+    if (d.kind == 'move') {           // a door follows the pointer onto the closest wall
+      Object.assign(r, doorAt(o.x + o.w / 2 + p.x - d.start.x, o.y + o.h / 2 + p.y - d.start.y, Math.max(o.w, o.h), o.w >= o.h, r.floor, ED.map));
+    } else {                          // an end: slides along the wall (not past it); the other end stays put
+      const a = o.w >= o.h, k = a ? 'x' : 'y', L = a ? 'w' : 'h', s0 = o[k], s1 = o[k] + o[L];
+      const seg = doorSeg(o, ED.map) || { lo: -Infinity, hi: Infinity }, delta = a ? p.x - d.start.x : p.y - d.start.y;
+      if (d.kind == 'd:0') { r[k] = clampN(snap(s0 + delta), Math.max(seg.lo, s1 - DOOR_MAX), s1 - DOOR_MIN); r[L] = s1 - r[k]; }
+      else r[L] = clampN(snap(s1 + delta), s0 + DOOR_MIN, Math.min(seg.hi, s0 + DOOR_MAX)) - s0;
+    }
+    if (r.x != o.x || r.y != o.y || r.w != o.w || r.h != o.h) d.moved = ED.dirty = true;
+    edDrawSvg();
+    const size = $('ed-size');
+    if (size) size.textContent = `${Math.max(r.w, r.h)} wide`;
+    return;
+  }
   if (d.kind == 'wall' || d.kind == 'corner') {
     if (edReshape(r, d, dx, dy)) d.moved = ED.dirty = true;
     edDrawSvg();
@@ -3301,24 +3553,26 @@ function edMove(e) {
     if (size) size.textContent = `${r.w} × ${r.h}`;
     return;
   }
+  // where the pointer wants the room (walls snapped to the walls nearby), then the closest clear spot to it
+  const T = { x: o.x, y: o.y, w: o.w, h: o.h }, L = d.lines, trees = isTree(r);
+  const sx = v => (trees ? v : snapTo(v, L.xs)), sy = v => (trees ? v : snapTo(v, L.ys));
   if (d.kind == 'move') {
-    const at = (x, y) => {
-      r.x = x; r.y = y;
-      if (o.pts) r.pts = o.pts.map(([px, py]) => [px + x - o.x, py + y - o.y]);
-      return !hitsHouse(r, ED.map);
-    };
-    const nx = clampN(o.x + dx, b.x, b.x + b.w - o.w), ny = clampN(o.y + dy, b.y, b.y + b.h - o.h);
-    // blocked by the house: slide along it, else stay at the last clear spot
-    if (!at(nx, ny) && !at(nx, d.last.y) && !at(d.last.x, ny)) at(d.last.x, d.last.y);
+    T.x = clampN(trees ? o.x + dx : snapSpan(o.x + dx, o.w, L.xs), b.x, b.x + b.w - o.w);
+    T.y = clampN(trees ? o.y + dy : snapSpan(o.y + dy, o.h, L.ys), b.y, b.y + b.h - o.h);
   } else {
-    if (d.kind.includes('e')) r.w = clampN(o.w + dx, MIN_ROOM, b.x + b.w - o.x);
-    if (d.kind.includes('s')) r.h = clampN(o.h + dy, MIN_ROOM, b.y + b.h - o.y);
-    if (d.kind.includes('w')) { const nx = clampN(o.x + dx, b.x, o.x + o.w - MIN_ROOM); r.w = o.x + o.w - nx; r.x = nx; }
-    if (d.kind.includes('n')) { const ny = clampN(o.y + dy, b.y, o.y + o.h - MIN_ROOM); r.h = o.y + o.h - ny; r.y = ny; }
-    if (hitsHouse(r, ED.map)) Object.assign(r, { x: d.last.x, y: d.last.y, w: d.last.w, h: d.last.h });
+    if (d.kind.includes('e')) T.w = clampN(sx(o.x + o.w + dx) - o.x, MIN_ROOM, b.x + b.w - o.x);
+    if (d.kind.includes('s')) T.h = clampN(sy(o.y + o.h + dy) - o.y, MIN_ROOM, b.y + b.h - o.y);
+    if (d.kind.includes('w')) { T.x = clampN(sx(o.x + dx), b.x, o.x + o.w - MIN_ROOM); T.w = o.x + o.w - T.x; }
+    if (d.kind.includes('n')) { T.y = clampN(sy(o.y + dy), b.y, o.y + o.h - MIN_ROOM); T.h = o.y + o.h - T.y; }
   }
+  const put = c => {
+    Object.assign(r, c);
+    if (o.pts && d.kind == 'move') r.pts = o.pts.map(([px, py]) => [px + c.x - o.x, py + c.y - o.y]);
+    return edClear(r, d);
+  };
+  // in the way: go as far toward it as the walls allow (sliding along them), from the last clear spot
+  if (!put(T)) put(approach(d.last, T, put));
   d.last = { x: r.x, y: r.y, w: r.w, h: r.h };
-  edPush(r, d.others);
   if (r.x != o.x || r.y != o.y || r.w != o.w || r.h != o.h) { ED.dirty = true; d.moved = true; }
   edDrawSvg();
   const size = $('ed-size');
@@ -3330,7 +3584,7 @@ function edMove(e) {
 // stays at its last good shape. A room that's still a plain rectangle pushes its neighbours as usual.
 function edReshape(r, d, dx, dy) {
   const O = d.pts, P = O.map(q => [...q]), n = P.length, b = d.bounds, i = d.idx;
-  const X = v => clampN(v, b.x, b.x + b.w), Y = v => clampN(v, b.y, b.y + b.h);
+  const X = v => clampN(snapTo(v, d.lines.xs), b.x, b.x + b.w), Y = v => clampN(snapTo(v, d.lines.ys), b.y, b.y + b.h);
   if (d.kind == 'wall') {
     const j = (i + 1) % n;
     if (O[i][1] == O[j][1]) P[i][1] = P[j][1] = Y(O[i][1] + dy);
@@ -3344,9 +3598,15 @@ function edReshape(r, d, dx, dy) {
   const C = cleanPts(P), bx = boxOf(C);
   if (C.length < 4 || !simplePts(C) || bx.w < MIN_ROOM || bx.h < MIN_ROOM) return false;
   if (hitsHouse({ ...bx, floor: r.floor, pts: C.length == 4 ? undefined : C }, ED.map)) return false;
-  if (C.length == 4) { delete r.pts; Object.assign(r, bx); edPush(r, d.others); }
-  else { r.pts = P; Object.assign(r, bx); edPush(r, d.others); }     // edPush leaves shaped rooms' neighbours alone
-  return true;
+  const was = { ...r };
+  if (C.length == 4) { delete r.pts; Object.assign(r, bx); }
+  else { r.pts = P; Object.assign(r, bx); }     // edPush (in edClear) leaves shaped rooms' neighbours alone
+  if (edClear(r, d)) return true;
+  // it would cover another room: keep the last good shape
+  delete r.pts;
+  Object.assign(r, was);
+  edPush(r, d.others);
+  return false;
 }
 
 // Positions of the other rooms on this floor when a move/resize starts
@@ -3400,6 +3660,25 @@ function edKey(e) {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ED.sel = r.id; edDrawSvg(r.id); edDrawPanel(); return; }
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); edDelete(r.id); return; }
   if ((e.key === 'r' || e.key === 'R') && isStairs(r)) { e.preventDefault(); ED.sel = r.id; edRotate(true); return; }
+  if (isDoor(r)) {                    // arrows move it along (or onto another) wall, Shift+arrows change its width, R flips it
+    const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if ((e.key === 'r' || e.key === 'R') && !r.opening) { e.preventDefault(); ED.sel = r.id; edDoorFlip(true); return; }
+    if (!k) return;
+    e.preventDefault();
+    ED.sel = r.id;
+    if (e.shiftKey) { edDoorLen(k[0] + k[1], true); return; }
+    const a = r.w >= r.h, len = Math.max(r.w, r.h), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    if (a ? k[0] : k[1]) Object.assign(r, doorAt(cx + k[0] * GRID, cy + k[1] * GRID, len, a, r.floor, ED.map));   // along its wall
+    else {                            // across: hop to the next wall that way
+      const l = doorHop(r, a ? k[1] : k[0]);
+      if (l == null) return;
+      Object.assign(r, doorAt(a ? cx : l, a ? l : cy, len, a, r.floor, ED.map));
+    }
+    ED.dirty = true;
+    edDrawSvg(r.id);
+    edDrawPanel();
+    return;
+  }
   const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
   if (!step) return;
   e.preventDefault();
@@ -3411,7 +3690,7 @@ function edKey(e) {
       : r.pts.map(([x, y]) => [x + step[0] * GRID, y + step[1] * GRID]);
     const C = cleanPts(P), bx = boxOf(C);
     if (simplePts(C) && bx.w >= MIN_ROOM && bx.h >= MIN_ROOM && bx.x >= b.x && bx.y >= b.y && bx.x + bx.w <= b.x + b.w && bx.y + bx.h <= b.y + b.h &&
-        !hitsHouse({ ...bx, floor: r.floor, pts: C }, ED.map)) {
+        !edBlocked({ ...r, ...bx, pts: C })) {
       r.pts = C;
       settleShape(r);
       ED.dirty = true;
@@ -3428,8 +3707,9 @@ function edKey(e) {
     r.x = clampN(r.x + step[0] * GRID, b.x, b.x + b.w - r.w);
     r.y = clampN(r.y + step[1] * GRID, b.y, b.y + b.h - r.h);
   }
-  if (hitsHouse(r, ED.map)) Object.assign(r, was);         // Outside: the house is in the way
+  const stuck = !isTree(r) && edBlocked({ ...r, ...was });   // already overlapping (older map): may still move
   edPush(r, before);
+  if (hitsHouse(r, ED.map) || (!stuck && !isTree(r) && edBlocked(r))) { Object.assign(r, was); edPush(r, before); }   // in the way: stay
   ED.dirty = true;
   edDrawSvg(r.id);
   edDrawPanel();
@@ -3505,7 +3785,7 @@ function edFreeSpot(w, h, proto = {}) {
     for (let y = a.y; y + h <= a.y + a.h; y += GRID) {
       for (let x = a.x; x + w <= a.x + a.w; x += GRID) {
         const c = { x, y, w, h, floor: ED.floor };
-        if (!rooms.some(o => overlaps(c, o))) return { x, y };
+        if (!rooms.some(o => !isDoor(o) && overlaps(c, o))) return { x, y };
       }
     }
   }
@@ -3562,6 +3842,54 @@ function edResetShape() {
   edDrawPanel();
 }
 
+// A door starts on the selected room's bottom wall, else the middle of the house's front (bottom) wall, opening inward
+function edAddDoor() {
+  const s = ED.sel && edRoom(ED.sel), o = houseOutline(ED.map);
+  const base = s && s.floor == ED.floor && !isFeature(s) ? s : o || { x: 300, y: 200, w: 200, h: 100 };
+  const id = newMapId();
+  ED.map.rooms.push({ id, kind: 'door', name: '', floor: ED.floor, swing: 1, ...doorAt(base.x + base.w / 2, base.y + base.h, DOOR_LEN, true, ED.floor, ED.map) });
+  ED.sel = id;
+  ED.dirty = true;
+  edDrawSvg(id);
+  edDrawPanel();
+}
+
+// The next wall line past door r in direction dir (±1): parallel to its wall and reaching where the door is
+function doorHop(r, dir) {
+  const a = r.w >= r.h, c = a ? r.x + r.w / 2 : r.y + r.h / 2, cur = a ? r.y + r.h / 2 : r.x + r.w / 2;
+  const lines = wallSegs(r.floor, ED.map)
+    .filter(([p, q]) => (p[1] == q[1]) == a && Math.min(a ? p[0] : p[1], a ? q[0] : q[1]) < c && Math.max(a ? p[0] : p[1], a ? q[0] : q[1]) > c)
+    .map(([p]) => (a ? p[1] : p[0])).filter(l => (l - cur) * dir > 0).sort((x, y) => Math.abs(x - cur) - Math.abs(y - cur));
+  return lines.length ? lines[0] : null;
+}
+
+// Which way the selected door opens: each press moves to the next of its 4 swings
+function edDoorFlip(keepFocus) {
+  const r = edRoom(ED.sel);
+  r.swing = ((r.swing || 0) + 1) % 4;
+  ED.dirty = true;
+  edDrawSvg(keepFocus ? r.id : undefined);
+}
+
+// A door, or just an opening in the wall (no door)
+function edDoorType(opening) {
+  const r = edRoom(ED.sel);
+  if (opening) r.opening = true; else delete r.opening;
+  ED.dirty = true;
+  edDrawSvg();
+  edDrawPanel();
+}
+
+// Wider (+1) or narrower (−1) by a grid step, staying on its wall (Shift + arrows)
+function edDoorLen(d, keepFocus) {
+  const r = edRoom(ED.sel), a = r.w >= r.h, seg = doorSeg(r, ED.map);
+  const len = clampN(Math.max(r.w, r.h) + d * GRID, DOOR_MIN, Math.min(DOOR_MAX, seg ? seg.hi - seg.lo : DOOR_MAX));
+  Object.assign(r, doorAt(r.x + r.w / 2, r.y + r.h / 2, len, a, r.floor, ED.map));
+  ED.dirty = true;
+  edDrawSvg(keepFocus ? r.id : undefined);
+  edDrawPanel();
+}
+
 // A blocked-off area starts big enough to cover something like the space over a garage
 function edAddBlocked() {
   const at = edPlace([[150, 150], [120, 120], [100, 80], [60, 60]]), id = newMapId();
@@ -3604,6 +3932,14 @@ function roomUse(id) {
 
 async function edDelete(id) {
   const r = edRoom(id);
+  if (isDoor(r)) {
+    ED.map.rooms = ED.map.rooms.filter(x => x.id !== id);   // nothing depends on a door: no need to ask
+    ED.sel = null;
+    ED.dirty = true;
+    edDrawSvg();
+    edDrawPanel();
+    return;
+  }
   if (isBlocked(r) || isTree(r)) {
     if (!await ask(isTree(r)
       ? { title: 'Delete this tree?', message: 'It’s removed from the map when you save.', ok: 'Delete tree', danger: true, icon: '🌳' }
@@ -3624,7 +3960,7 @@ async function edDelete(id) {
     edDrawPanel();
     return;
   }
-  const u = roomUse(id);
+  const u = isYardArea(r) ? {} : roomUse(id);
   const used = u.projects || u.tasks
     ? ` ${[u.projects && `${u.projects} project${u.projects == 1 ? '' : 's'}`, u.tasks && `${u.tasks} task${u.tasks == 1 ? '' : 's'}`].filter(Boolean).join(' and ')} use this room and will count toward Whole house instead.`
     : '';

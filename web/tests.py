@@ -606,12 +606,13 @@ class OutsideMapTests(AuthedTestCase):
         self.client.put('/api/settings/put', data=json.dumps({'map': m}), content_type='application/json')
 
     def test_starter_map_has_outside_yards(self):
-        from .rooms import DEFAULT_MAP, all_rooms
+        from .rooms import DEFAULT_MAP, all_rooms, yard_areas
 
         self.assertIn('outside', [f['id'] for f in DEFAULT_MAP['floors']])
+        self.assertEqual(set(yard_areas()), {'backyard', 'frontyard'})
         ids = [r[0] for r in all_rooms()]
-        self.assertIn('backyard', ids)
-        self.assertIn('frontyard', ids)
+        self.assertNotIn('backyard', ids)  # parts of the yard, not rooms
+        self.assertIn('yard', ids)
 
     def test_structures_are_rooms_trees_are_not(self):
         from .rooms import all_rooms, match_room
@@ -709,6 +710,63 @@ class RankingTests(AuthedTestCase):
         )
         main = next(f for f in data['floors'] if f['id'] == 'main')
         self.assertEqual(main['todo'], 14)
+
+    def test_only_tasks_due_soon_are_ranked(self):
+        # ToDo tasks due past showDays wait (like on the Home map); Doing tasks always count
+        today = date.today()
+        Task.objects.create(project='Kitchen', title='soon', due=today + timedelta(days=7))
+        Task.objects.create(project='Kitchen', title='later', due=today + timedelta(days=8))
+        Task.objects.create(project='Kitchen', title='next year', due=today + timedelta(days=300))
+        Task.objects.create(project='Kitchen', title='started', due=today + timedelta(days=300), status='doing')
+        kitchen = lambda: next(x for x in self.client.get('/api/ranking').json()['rooms'] if x['id'] == 'kitchen')
+        self.assertEqual((kitchen()['todo'], kitchen()['doing']), (1, 1))
+        KeyValueStore.objects.create(k='settings', v=json.dumps({'showDays': 30}))
+        self.assertEqual(kitchen()['todo'], 2)
+        self.assertEqual(Task.objects.count(), 4)  # nothing hidden is touched
+
+    def test_doors_are_not_rooms(self):
+        from .rooms import all_rooms, match_room
+
+        m = {
+            'floors': [{'id': 'main', 'name': 'Main'}],
+            'ground': 'main',
+            'rooms': [
+                {'id': 'k', 'name': 'Kitchen', 'floor': 'main', 'x': 0, 'y': 0, 'w': 100, 'h': 100},
+                {
+                    'id': 'd',
+                    'kind': 'door',
+                    'name': '',
+                    'floor': 'main',
+                    'x': 95,
+                    'y': 30,
+                    'w': 10,
+                    'h': 30,
+                    'swing': 1,
+                },
+            ],
+        }
+        KeyValueStore.objects.create(k='settings', v=json.dumps({'map': m}))
+        self.assertEqual([r[0] for r in all_rooms()], ['house', 'yard', 'k'])
+        self.assertIsNone(match_room('d'))
+
+    def test_yard_areas_count_as_the_yard(self):
+        # the starter map has a Back yard and a Front yard on Outside; they're parts of the yard, not rooms
+        KeyValueStore.objects.create(k='settings', v=json.dumps({'rooms': {'Mowing': 'frontyard'}}))
+        today = date.today()
+        Task.objects.create(project='Upkeep', title='rake', due=today, room='backyard')
+        Task.objects.create(project='Mowing', title='mow', due=today)  # project stored in an area
+        Task.objects.create(project='Back yard fence', title='paint', due=today)  # named after an area
+        data = self.client.get('/api/ranking').json()
+        rooms = {x['id']: x for x in data['rooms']}
+        self.assertNotIn('backyard', rooms)
+        self.assertNotIn('frontyard', rooms)
+        self.assertEqual(rooms['yard']['todo'], 3)
+        self.assertEqual(data['home']['todo'], 3)
+        outside = next(f for f in data['floors'] if f['id'] == 'outside')
+        self.assertEqual(outside['todo'], 3)
+        from .rooms import match_room
+
+        self.assertEqual(match_room('Back yard'), 'yard')  # CSV import
 
     def test_needs_sign_in_and_get(self):
         self.assertEqual(self.client.post('/api/ranking').status_code, 405)

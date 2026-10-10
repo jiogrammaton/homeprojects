@@ -40,6 +40,7 @@
   /* map walls: the app's slate, not black. Outer walls light slate, inner walls the panel line color */
   --wall: #7f93a8;
   --wall-in: #3d4f66;
+  --door: #c9d6e3;
 }
 
 * { box-sizing: border-box; }
@@ -1176,6 +1177,8 @@ input.lname:focus { outline: none; border-color: var(--acc); background: var(--d
 }
 .plan { display: block; width: 100%; height: auto; font-family: inherit; }
 .plan text { text-anchor: middle; dominant-baseline: central; pointer-events: none; fill: var(--card-text); }
+/* every map label gets the stairs labels' thin dark outline (emoji icons don't) */
+.plan text:not(.re, .te) { paint-order: stroke; stroke: #1d2733; stroke-width: 4px; stroke-linejoin: round; }
 .plan .re { font-size: 26px; }
 .plan .rn { font-size: 14px; font-weight: 700; }
 .plan .rc { font-size: 12px; fill: var(--mut2); }
@@ -1192,6 +1195,29 @@ input.lname:focus { outline: none; border-color: var(--acc); background: var(--d
 .room:hover .yard, .room:focus-visible .yard { fill: color-mix(in srgb, var(--rc) 34%, #16202b); }
 .floor { fill: #253142; }   /* inside the house but not in a room = hallway */
 .walls { fill: none; stroke: var(--wall); stroke-width: 8; stroke-linejoin: round; pointer-events: none; filter: drop-shadow(0 0 4px rgba(10, 18, 30, 0.6)); }
+/* inner walls: drawn again over each room's glow (which would lighten them), so every inner wall is the same color */
+.plan .room .rwall :is(rect, polygon) { fill: none; stroke: var(--wall-in); stroke-width: 5; pointer-events: none; }
+.plan .room.structure .rwall :is(rect, polygon) { stroke: var(--wall); stroke-width: 8; }
+.plan .room:focus-visible .rwall :is(rect, polygon) { stroke: #fff; }
+/* doors: a pale opening across the wall, the open leaf, and a dashed swing */
+.door .dgap { fill: var(--door); stroke: none; }
+.dsw .dleaf { fill: none; stroke: var(--door); stroke-width: 2.5; stroke-linecap: round; }
+.dsw .dswing { fill: none; stroke: var(--door); stroke-opacity: 0.55; stroke-width: 1.5; stroke-dasharray: 4 4; }
+.door.opening .dgap { fill: color-mix(in srgb, var(--door) 35%, var(--wall-in)); }
+.door.opening.outer .dgap { fill: color-mix(in srgb, var(--door) 45%, var(--wall)); }
+.door .ddiv { fill: none; stroke: var(--door); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.door .djamb { fill: none; stroke: var(--door); stroke-width: 2; }
+.plan .doors { pointer-events: none; }
+.dsw { pointer-events: none; }
+.edroom .edwall :is(rect, polygon) { fill: none !important; pointer-events: none; }
+.dsw.sel :is(.dleaf, .dswing) { stroke: #7cc4ff; }
+.edroom.eddoor { cursor: move; outline: none; }
+.edroom.eddoor .dgap { fill: var(--door); stroke: none; }
+.edroom.eddoor .dhit { fill: transparent; stroke: none; }
+.edroom.eddoor.opening .dgap { fill: color-mix(in srgb, var(--door) 35%, var(--wall-in)); }
+.edroom.eddoor.opening.outer .dgap { fill: color-mix(in srgb, var(--door) 45%, var(--wall)); }
+.edroom.eddoor.sel .dgap, .edroom.eddoor:focus-visible .dgap { fill: #7cc4ff; }
+.edroom.eddoor.sel :is(.djamb, .ddiv), .edroom.eddoor:focus-visible :is(.djamb, .ddiv) { stroke: #7cc4ff; }
 
 .tip {
   position: fixed;
@@ -1288,6 +1314,7 @@ input.lname:focus { outline: none; border-color: var(--acc); background: var(--d
   color: var(--ink);
 }
 .roombar a { margin-left: auto; color: #2b6cb0; font-weight: 600; }
+.roombar > a { white-space: nowrap; }
 
 /* ---- sign-in and password pages ---- */
 body.auth {
@@ -1410,7 +1437,7 @@ body.auth {
 .hallsw { background: #253142; border: 1px solid #6b7a8c; }
 
 /* plants in the yard (ground floor) */
-.plan .garden text { text-anchor: middle; dominant-baseline: central; pointer-events: none; opacity: 0.9; }
+.plan .garden text { text-anchor: middle; dominant-baseline: central; pointer-events: none; opacity: 0.9; stroke: none; }
 .plan .edgarden text { opacity: 0.45; }
 
 /* stairs: solid on their own floor, see-through dashed outline on the floor they lead to */
@@ -1459,7 +1486,8 @@ body.auth {
 .edstairs.sel rect { stroke: #7cc4ff; stroke-width: 3; }
 .edstairs.ghost:hover rect { stroke: #7cc4ff; }
 .edbtnrow { display: flex; gap: 8px; margin-top: 8px; }
-.edbtnrow .red { margin-top: 0; }
+.edbtnrow > button, .edsel .edbtnrow .red { flex: 1 1 0; margin: 0; }   /* buttons in a row share it equally */
+.eddtype { margin-top: 8px; }
 .edaddrow { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
 .edaddrow .edadd { margin-top: 0; }
 .edlot { margin-top: 12px; padding-top: 4px; border-top: 1px solid var(--line); }
@@ -1523,6 +1551,9 @@ body.auth {
 /* ---- Outside: yard areas (dashed), structures (solid walls), trees, and the house (hatched, fixed) ---- */
 .plan .room.area :is(rect, polygon) { fill: color-mix(in srgb, var(--rc) 30%, #1f3b2f); stroke: #9fd3b4; stroke-opacity: 0.55; stroke-width: 4; stroke-dasharray: 14 9; }
 .plan .room.area:hover :is(rect, polygon), .plan .room.area:focus-visible :is(rect, polygon) { fill: color-mix(in srgb, var(--rc) 50%, #1f3b2f); }
+/* yard areas are part of the yard: pointing at any part of it lights up all of it */
+.plan.outside:has([data-room="yard"]:is(:hover, :focus-visible)) .room.area[data-room="yard"] :is(rect, polygon) { fill: color-mix(in srgb, var(--rc) 50%, #1f3b2f); }
+.plan.outside:has([data-room="yard"]:is(:hover, :focus-visible)) .room .yard { fill: color-mix(in srgb, var(--rc) 34%, #16202b); }
 .plan .room.structure :is(rect, polygon) { stroke: var(--wall); stroke-width: 8; }
 .plan .housebox .hb { fill: url(#hatch); stroke: var(--wall); stroke-width: 12; }
 .plan .housebox text { paint-order: stroke; stroke: #121923; stroke-width: 5px; stroke-linejoin: round; }
@@ -1869,22 +1900,29 @@ body.lifting, body.lifting * { user-select: none; cursor: grabbing !important; }
 /* the button that was tapped stays readable while it says "Saving…" */
 .formbtns button.busy:disabled { opacity: 1; cursor: progress; }
 
-/* ---- room moods (moodSVG in app.js): cozy when it's under control, boiling when it isn't ---- */
+/* ---- room moods (moodSVG in app.js): cozy when it's under control, fuming and falling apart when it isn't ---- */
 .plan .mood { pointer-events: none; }
 .plan .mood * { transform-box: fill-box; transform-origin: center; }
 .plan .room .mood .lamp { mix-blend-mode: screen; animation: lampGlow 5s ease-in-out var(--dl, 0s) infinite alternate; }
 .plan .room .mood .lamp.sun { animation-duration: 7s; }
 .plan .room .mood .spark { fill: #fff6cf; filter: drop-shadow(0 0 3px rgba(255, 240, 180, 0.9)); opacity: 0; animation: twinkle var(--d) ease-in-out var(--dl) infinite; }
 .plan .room .mood .mote { fill: #ffdc9a; opacity: 0; animation: drift var(--d) ease-in-out var(--dl) infinite; }
-.plan .room .mood .heat { animation: simmer 3s ease-in-out infinite alternate; }
+/* the general `.room :is(rect, polygon)` fill would paint over the heat gradient (a flat brown sheet); use the gradient */
+.plan .room .mood .heat { fill: url(#mood-hot); stroke: none; animation: simmer 3s ease-in-out infinite alternate; }
+.plan .room .mood .heat.boil { fill: url(#mood-boil); }
 .plan .room .mood .heat.boil { animation-duration: 1.1s; }
-.plan .room .mood .bub { fill: rgba(255, 236, 214, 0.22); stroke: rgba(255, 240, 225, 0.75); stroke-width: 1.4; opacity: 0; animation: rise var(--d) ease-in var(--dl) infinite; }
-.plan .room .mood-neglected .bub { fill: rgba(255, 210, 200, 0.25); stroke: rgba(255, 225, 215, 0.85); }
-.plan .room .mood .steam { fill: none; stroke: rgba(255, 255, 255, 0.5); stroke-width: 4; stroke-linecap: round; opacity: 0; animation: steam 2.6s ease-out var(--dl) infinite; }
+.plan .room .mood .fume { opacity: 0; animation: fume var(--d) ease-out var(--dl) infinite; }
+.plan .room .mood .brick { opacity: 0; animation: brickFall var(--d) var(--dl) infinite; }
+.plan .room .mood .brick rect { fill: #b5524a; stroke: #6e2a28; stroke-width: 1; }
+.plan .room .mood .brick path { fill: none; stroke: #6e2a28; stroke-width: 0.8; }
+.plan .room .mood .dust { opacity: 0; animation: dust var(--d) ease-out var(--dl) infinite; }
 .plan .room .mood .edge { fill: none; stroke: #ff4d5a; stroke-width: 10; animation: edgePulse 1.1s ease-in-out infinite alternate; }
 /* a room in trouble keeps its color strong; an empty room glows a little brighter */
 .plan .room[data-tier="perfect"] > :is(rect, polygon) { fill: color-mix(in srgb, var(--rc) 50%, #1d2733); }
 .plan .room[data-tier="neglected"] > :is(rect, polygon) { fill: color-mix(in srgb, var(--rc) 52%, #1d2733); }
+/* slacking: mixing orange with the slate goes brown, so darken the orange itself instead (keeps it a clean orange) */
+.plan .room[data-tier="slacking"] > :is(rect, polygon) { fill: #a4501c; fill: oklch(from var(--rc) calc(l * 0.72) calc(c * 0.85) h); }
+.plan .room[data-tier="slacking"]:is(:hover, :focus-visible) > :is(rect, polygon) { fill: #bb5d22; fill: oklch(from var(--rc) calc(l * 0.8) calc(c * 0.9) h); }
 .plan .room[data-tier="perfect"]:hover > :is(rect, polygon), .plan .room[data-tier="neglected"]:hover > :is(rect, polygon) { fill: color-mix(in srgb, var(--rc) 66%, #1d2733); }
 .plan .room .rc { font-weight: 600; }
 .plan .room[data-tier="perfect"] .rc { fill: #bff0d6; }
@@ -1899,23 +1937,32 @@ body.lifting, body.lifting * { user-select: none; cursor: grabbing !important; }
   100% { opacity: 0; transform: translate(6px, var(--rise)); }
 }
 @keyframes simmer { from { opacity: 0.55; } to { opacity: 1; } }
-@keyframes rise {
+@keyframes fume {
   0% { opacity: 0; transform: translate(0, 0) scale(0.4); }
-  15% { opacity: 1; }
-  50% { transform: translate(var(--sx), calc(var(--rise) * 0.5)) scale(0.85); }
-  85% { opacity: 0.9; }
-  100% { opacity: 0; transform: translate(calc(var(--sx) * -0.6), var(--rise)) scale(1.15); }
+  20% { opacity: 1; }
+  60% { opacity: 0.7; transform: translate(var(--sx), calc(var(--rise) * 0.6)) scale(1.1); }
+  100% { opacity: 0; transform: translate(calc(var(--sx) * -0.5), var(--rise)) scale(1.7); }
 }
-@keyframes steam {
-  0% { opacity: 0; transform: translateY(6px) scaleY(0.6); }
-  35% { opacity: 0.7; }
-  100% { opacity: 0; transform: translateY(-16px) scaleY(1.1); }
+/* falls (speeding up), bounces once on the floor, settles, then fades before the next one */
+@keyframes brickFall {
+  0% { opacity: 1; transform: translateY(0) rotate(0deg); animation-timing-function: cubic-bezier(0.5, 0, 1, 1); }
+  55% { opacity: 1; transform: translateY(var(--fall)) rotate(var(--rot)); animation-timing-function: ease-out; }
+  62% { transform: translateY(calc(var(--fall) - 7px)) rotate(calc(var(--rot) * 1.2)); animation-timing-function: ease-in; }
+  69% { transform: translateY(var(--fall)) rotate(var(--rot)); }
+  88% { opacity: 1; transform: translateY(var(--fall)) rotate(var(--rot)); }
+  100% { opacity: 0; transform: translateY(var(--fall)) rotate(var(--rot)); }
+}
+@keyframes dust {
+  0%, 53% { opacity: 0; transform: scale(0.3); }
+  58% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-8px) scale(1.8); }
 }
 @keyframes edgePulse { from { stroke-opacity: 0.15; } to { stroke-opacity: 0.7; } }
 @media (prefers-reduced-motion: reduce) {
   .plan .mood * { animation: none !important; }
-  .plan .room .mood :is(.spark, .bub, .mote) { opacity: 0.7; }
-  .plan .room .mood .steam { opacity: 0.4; }
+  .plan .room .mood :is(.spark, .mote) { opacity: 0.7; }
+  .plan .room .mood .fume { opacity: 0.5; }
+  .plan .room .mood .brick { opacity: 0.9; transform: translateY(var(--fall)) rotate(var(--rot)); }   /* bricks lie on the floor */
   .plan .room .mood .edge { stroke-opacity: 0.45; }
 }
 

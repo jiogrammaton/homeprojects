@@ -10,11 +10,11 @@ Python package `web`, Django app **label `tasks`** (`apps.WebConfig.label`; kept
 | `models.py` | `Task` (table `tasks`) and `KeyValueStore` (table `kv`). See "Data model". |
 | `views.py` | Page view + the whole JSON API, plus server rules: duplicates, recurring tasks, project rename/delete, backup/restore, CSV import. Sections: Pages · Settings blob · Tasks · Projects · Settings · History & reset · Backup & restore · Ranking · CSV import · Recurring tasks. |
 | `urls.py` | Page routes and `/api/*` routes (table below). Included by `config/urls.py`. |
-| `ranking.py` | `TIERS`, `tier(n)`, `ranking(settings)` for `GET /api/ranking`. Mirrored by `LEVELS`/`tierOf` in `static/app.js`. |
-| `rooms.py` | The house map server-side: `BUILTIN_ROOMS` (house, yard), `DEFAULT_MAP` (starter floors/rooms, also passed to app.js as the `map-default` json_script), `current_map()`, `all_rooms()`, `match_room()` (id/name/alias → room id; `None` if not on the map), `guess_room()`/`room_for_project()` (mirror `guessRoom`/`roomFor` in app.js; used by ranking), `ALIASES`, `LEGACY_ROOMS`, `ROOM_GUESS`, `ROOM_KINDS`. |
+| `ranking.py` | `TIERS`, `tier(n)`, `show_days(settings)`, `ranking(settings)` for `GET /api/ranking`. Mirrored by `LEVELS`/`tierOf` in `static/app.js`. |
+| `rooms.py` | The house map server-side: `BUILTIN_ROOMS` (house, yard), `DEFAULT_MAP` (starter floors/rooms, also passed to app.js as the `map-default` json_script), `current_map()`, `all_rooms()` (built-ins + rooms and structures; yard areas aren't rooms), `yard_areas()` ({id: name} of the areas on Outside), `canonical_room()` (`LEGACY_ROOMS`, and an area id → `yard`), `OUTSIDE`, `match_room()` (id/name/alias → room id; a yard area's name → `yard`; `None` if not on the map), `guess_room()`/`room_for_project()` (mirror `guessRoom`/`roomFor` in app.js; used by ranking), `ALIASES`, `LEGACY_ROOMS`, `ROOM_GUESS`, `ROOM_KINDS`. |
 | `repeat.py` | Repeat frequencies: `UNITS` (`d`,`w`,`m`), `parse_freq(text)` → `(n, unit)` (mirrors `parseFreq` in app.js: "weekly", "biweekly", "Every 3 weeks", "2-5 years"…), `freq_label(n, unit)`, `add_interval(date, n, unit)` (relativedelta). `is_repeat_label`/`strip_repeat_tags`/`clean_settings` exist only for migration 0003. |
 | `security.py` | `LoginRequiredMiddleware` (pages → `/login/`, `/api/*` → `401 {"error"}`), `AuditLogMiddleware` (logs every non-GET `/api/` call: user, method, path, status, IP, ms), `ThrottledLoginView` (429 lockout), `client_ip()`, `who()`, and the `user_logged_in/out/login_failed` signal handlers. |
-| `tests.py` | 39 tests (see "Tests"). Run `python manage.py test web`. |
+| `tests.py` | 42 tests (see "Tests"). Run `python manage.py test web`. |
 | `admin.py` | Nothing registered: data is edited in the app; `/admin/` is only for accounts. |
 | `__init__.py` | empty. |
 
@@ -48,6 +48,7 @@ Python package `web`, Django app **label `tasks`** (`apps.WebConfig.label`; kept
   "projectNames": ["<project>", ...],          // projects that may have no tasks yet
   "rooms":        {"<project>": "<room id>"},  // Home map room; missing -> guessRoom(name)
   "spawnDays":    7,                           // read by the server in spawn_recurring()
+  "showDays":     7,                           // Board/Home/ranking window: ToDo tasks due within N days (0-365)
   "dueYellow":    14, "dueOrange": 7,          // card due-date colors
   "freqs":        {"<label>": {"n", "u"} | 0},  // a label's repeat (u = d|w|m; 0 = plain label); a bare number = months (old). Missing -> FREQ built-in, else parseFreq(name)
   "map": {                                     // Home map (absent = rooms.DEFAULT_MAP)
@@ -93,17 +94,17 @@ JSON API (sign-in + CSRF token required; a wrong method gets **405** from the `r
 
 **CSV import** (`parse_csv` → wizard → `save_rows`). `CSV_COLUMNS = Task, Area, Room, Frequency, Interval (Months), Timing, Notes, Tutorial URL, Last Done, Next Due`; headers match case-insensitively in any order; only `Task` is required; a file with none of them → 400; BOM stripped; latin-1 fallback. `parse_csv` never writes; `_parse_row` fills defaults and records issues: `error` = no task name (row blocked); `warn` = no Area ("General"), unknown Room (project's room), unreadable interval (one-off), bad date text, no due date on a one-off (today). Dates: `YYYY-MM-DD`, `M/D/YYYY`, `M/D/YY` (`parse_date`). `due` = Next Due → Last Done + interval → `first_due(Timing, interval, unit)`: the earliest upcoming 1st of a season month named in Timing (`SEASON_MONTHS`: Spring→Apr, Summer→Jun, Fall→Oct), else today + one interval (Monthly → a month out, Annually → a year out), else today for a one-off. A day/week Frequency overrides the months column. `tags` = Frequency text (else `freq_label`) + Timing. `duplicate` = title already in the DB or earlier in the file. `save_rows` re-checks everything and skips titles that already exist anywhere, so re-importing is safe.
 
-**Ranking** (`ranking.py`). A count of **ToDo (backlog)** tasks ranks as:
+**Ranking** (`ranking.py`). A count of **ToDo (backlog)** tasks due within `show_days(settings)` (`showDays`, default 7, clamped 0–365; overdue included, later ones ignored like on the Home map) ranks as:
 | tier key | name | count | color (app.js) | mood on the map |
 |---|---|---|---|---|
 | `perfect` | Perfect | 0 | green `#2fbf71` | sunny glow + 4 sparkles |
 | `thriving` | Thriving | 1–3 | green `#3e9a78` | sunny glow + 2 sparkles |
 | `livable` | Livable | 4–6 | light green `#9ccc65` | lamp + motes |
 | `neutral` | Neutral | 7–10 | yellow `#e9c46a` | lamp |
-| `slacking` | Slacking | 11–20 | orange `#e0782a` | heat + bubbles |
-| `neglected` | Neglected | 21+ | red `#d64550` | boil, steam, pulsing edge |
+| `slacking` | Slacking | 11–20 | orange `#e0782a` | heat + fumes |
+| `neglected` | Neglected | 21+ | red `#d64550` | thick fumes, falling bricks (dust puff on landing), pulsing edge |
 
-`ranking(settings)` returns `{counts:'todo', tiers:[{tier,rank,mood,min,max}], home, summary:{tier: n rooms}, rooms[], floors[], projects[]}`; every row has `todo`, `doing`, `overdue`, `tier`, `rank`, `mood`. Tasks count toward their own room if it's on the map (`LEGACY_ROOMS` applied), else their project's room (`room_for_project`). Rooms are sorted by ToDo (then overdue, name). Changing tiers means changing `TIERS` here **and** `LEVELS`/`TIER_MAX`/`MOODS` in app.js, `RANK_PARAM`'s list, the `data-tier` CSS rules, and `RankingTests`.
+`ranking(settings)` returns `{counts:'todo', tiers:[{tier,rank,mood,min,max}], home, summary:{tier: n rooms}, rooms[], floors[], projects[]}`; every row has `todo`, `doing`, `overdue`, `tier`, `rank`, `mood`. Tasks count toward their own room if it's on the map (`canonical_room`: `LEGACY_ROOMS`, and yard areas count as `yard`), else their project's room (`room_for_project`). Rooms are sorted by ToDo (then overdue, name). The yard's row counts toward the `outside` floor (or the ground floor on maps without one), like the Home map's floor tabs. Changing tiers means changing `TIERS` here **and** `LEVELS`/`TIER_MAX`/`MOODS` in app.js, `RANK_PARAM`'s list, the `data-tier` CSS rules, and `RankingTests`.
 
 **Rooms.** Task saves, CSV import, and restore accept only rooms on the current map (`match_room`, unknown → `''`); restore checks against the backup's own map.
 

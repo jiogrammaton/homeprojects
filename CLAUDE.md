@@ -25,7 +25,7 @@ Every folder has its own `CLAUDE.md` with notes on each file in it. Read the one
 ```bash
 source venv/bin/activate
 python manage.py runserver            # http://127.0.0.1:8000/ (sign-in required)
-python manage.py test web             # 39 tests, all should pass
+python manage.py test web             # 42 tests, all should pass
 python manage.py check --deploy       # only the 4 HTTPS warnings are expected on plain HTTP
 python manage.py makemigrations tasks && python manage.py migrate   # after model changes (app LABEL is still 'tasks')
 ruff check . && ruff format --check . # lint + format check (pyproject.toml); `ruff format .` to fix
@@ -73,6 +73,8 @@ Node isn't installed; `gjs` can syntax-check JS (`new Function(src)`).
 
 **Server-rendered shell + client-rendered content.** Every app page renders `web/templates/base.html` with `<body data-view="home|board|cal|stats|settings" data-tab="projects|tasks|labels|misc" data-user="…">`. `web/static/app.js` reads those, fetches `/api/tasks` and `/api/settings`, and builds the page into `<main id="m">` with `innerHTML` template strings. UI changes almost always go in `app.js` / `style.css` / `base.html`. Python changes are for the data model, API endpoints, server-side rules (recurrence, import, cascade deletes, backup, ranking), auth/security, or routes. Most UI state that isn't tasks lives in one client-owned JSON "settings blob" (see `web/CLAUDE.md`).
 
+**Upcoming window:** the Board and Home show (and rank) only ToDo tasks due within `showDays` (settings, default 7; overdue included); Doing/Done always show. Calendar, Stats and Settings › Tasks show everything; nothing is hidden in the data.
+
 **Ranking** (Overall feature): a count of ToDo tasks ranks as Perfect 0 · Thriving 1–3 · Livable 4–6 · Neutral 7–10 · Slacking 11–20 · Neglected 21+ (`web/ranking.py` `TIERS`, mirrored by `LEVELS`/`tierOf` in app.js; keep both in sync). Rooms, floors, projects and the whole home are ranked; `GET /api/ranking` returns it all.
 
 ## Conventions and user preferences
@@ -81,7 +83,7 @@ Node isn't installed; `gjs` can syntax-check JS (`new Function(src)`).
 - Python: PEP 8 via ruff (`pyproject.toml`), module docstrings explaining the file's role, sections marked `# ---- Name ----`, small function-based views (no DRF/forms), `require_GET`/`require_POST`/`require_http_methods` on API views (wrong method = 405).
 - JS/CSS: match the compact style: short names, inline-handler HTML strings, section markers `/* ---- name ---- */`. The top of `app.js` and `style.css` lists the sections.
 - Visual consistency matters to the user: new UI should reuse `.prow`/`.mrow`/`.pgroup`/`.stats-card`/`.pbtn` patterns and the existing palette (slate/navy + green accent, no brown, no black walls).
-- Bump the `?v=N` cache-busting number in `base.html` and `auth_base.html` on every CSS/JS change (currently **41**).
+- Bump the `?v=N` cache-busting number in `base.html` and `auth_base.html` on every CSS/JS change (currently **54**).
 - Keep `CLAUDE.md` files current: when you change a file, update its folder's `CLAUDE.md`.
 
 ## Known gaps / gotchas

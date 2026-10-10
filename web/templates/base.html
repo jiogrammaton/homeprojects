@@ -6,8 +6,8 @@
   <title>{% block title %}Home Projects{% endblock %} · Home Projects</title>
   {% load static %}
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{% static 'style.css' %}?v=41">
-  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=41">
+  <link rel="stylesheet" href="{% static 'style.css' %}?v=54">
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}?v=54">
 </head>
 <body data-view="{{ view }}" data-tab="{{ tab }}" data-user="{{ request.user.get_username }}">
 <header class="topbar">
@@ -133,6 +133,6 @@
 <dialog id="iw" class="wiz" aria-labelledby="iw-title"><div id="iw-body"></div></dialog>
 
 {{ default_map|json_script:"map-default" }}
-<script src="{% static 'app.js' %}?v=41"></script>
+<script src="{% static 'app.js' %}?v=54"></script>
 </body>
 </html>

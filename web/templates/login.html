@@ -16,11 +16,4 @@
   <input type="hidden" name="next" value="{{ next }}">
   <button type="submit" class="p">Sign in</button>
 </form>
-<script>
-  // Enter (or the keyboard's "Next" key) on Username moves to Password until a password is typed
-  document.getElementById('id_username').addEventListener('keydown', e => {
-    const pw = document.getElementById('id_password');
-    if (e.key === 'Enter' && !pw.value) { e.preventDefault(); pw.focus(); }
-  });
-</script>
 {% endblock %}
