@@ -674,14 +674,22 @@ const labelLink = g => `/board/?label=${encodeURIComponent(g.toLowerCase())}`;
 // Settings > Miscellaneous values (with defaults)
 function spawnDays() { return Number.isFinite(+ST.spawnDays) ? +ST.spawnDays : 7; }
 function showDays() { return Number.isFinite(+ST.showDays) ? +ST.showDays : 7; }
+function showDaysShort() { return Number.isFinite(+ST.showDaysShort) ? +ST.showDaysShort : 3; }
+function doneDays() { return Number.isFinite(+ST.doneDays) ? +ST.doneDays : 7; }
 
-/* ---- upcoming window: Board and Home show only ToDo tasks due within showDays() (overdue included); Doing and
-   Done always show. Calendar, Stats and Settings show everything. ?all=1 on the Board shows every task. ---- */
+/* ---- upcoming window: Board and Home show only ToDo tasks due within showFor(t) days (overdue included): showDays(),
+   or showDaysShort() for tasks that repeat more often than monthly. Doing and Done always show. Calendar, Stats and
+   Settings show everything. ?all=1 on the Board shows every task. ---- */
 const SHOW_ALL = new URLSearchParams(location.search).get('all') === '1';
 let LATER = 0;                 // tasks the window hid on this render (after the other filters)
 const dayIn = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
-const upcoming = t => t.status != 'backlog' || t.due <= dayIn(showDays());
+// mirrors shows_days() in ranking.py: under 4 weeks counts as shorter than monthly
+const showFor = t => t.interval > 0 && t.interval * { d: 1, w: 7 }[t.interval_unit] < 28 ? showDaysShort() : showDays();
+const upcoming = t => t.status != 'backlog' || t.due <= dayIn(showFor(t));
 const windowed = () => V === 'home' || (V === 'board' && !SHOW_ALL);
+// Done cards leave the Board and Home doneDays() days after they were finished (even with ?all=1). They stay in the
+// data, so Stats, the Calendar and Settings › Tasks still have them. A done task with no done_at stays.
+const recentDone = t => t.status != 'done' || !t.done_at || t.done_at > dayIn(-doneDays());
 function allLink(on) {
   const u = new URL(location.href);
   on ? u.searchParams.set('all', '1') : u.searchParams.delete('all');
@@ -802,6 +810,7 @@ function draw() {
   if (V === 'board' && PROJECT_PARAM) L = L.filter(t => t.project.toLowerCase() === PROJECT_PARAM);
   if (V === 'board' && LABEL_PARAM) L = L.filter(t => lbls(t).some(g => g.toLowerCase() === LABEL_PARAM));
   if (V === 'board' && RANK_PARAM) { const rs = roomStats(T.filter(upcoming), ''); L = L.filter(t => roomLevel(rs[taskRoom(t)]) === RANK_PARAM); }
+  if (V === 'home' || V === 'board') L = L.filter(recentDone);
   LATER = 0;
   if (windowed()) { const n = L.length; L = L.filter(upcoming); LATER = n - L.length; }
 
@@ -1534,6 +1543,7 @@ function miscUI() {
   const user = document.body.dataset.user || '';
   const row = (title, note, actions, cls = '') =>
     `<div class="mrow${cls}"><div><b>${title}</b><p class="note">${note}</p></div><div class="mact">${actions}</div></div>`;
+  const OS = ST.offSeason || {};
   const num = (key, v, min, max) =>
     `<input type="number" class="num" min="${min}" max="${max}" value="${v}" onchange="setNum('${key}',this,${min},${max})">`;
 
@@ -1550,6 +1560,15 @@ function miscUI() {
     <div class="pgroup">Board &amp; Home</div>
     ${row('How far ahead to show', 'The Board and the Home map show ToDo tasks due within this many days (overdue ones too). Tasks due later stay on the Calendar and in Settings › Tasks.',
       `${num('showDays', showDays(), 0, 365)}<span>days ahead</span>`)}
+    ${row('How far ahead to show frequent repeats', 'The same, for tasks that repeat more often than monthly (daily, weekly, every 2 or 3 weeks). Monthly and longer use the setting above.',
+      `${num('showDaysShort', showDaysShort(), 0, 365)}<span>days ahead</span>`)}
+    ${row('How long Done tasks stay', 'Finished tasks leave the Board and the Home map this many days after they were done. They still count in Stats and stay on the Calendar and in Settings › Tasks.',
+      `${num('doneDays', doneDays(), 0, 365)}<span>days</span>`)}
+
+    <div class="pgroup">Outdoor off-season</div>
+    ${row('Rest outdoor tasks', 'ToDo tasks in Yard &amp; exterior that are due in these months move to the 1st of the month after, so they aren’t due or shown until then. Label a task “Year-round” to keep it where it is.',
+      `<select id="osf" class="rfilt" aria-label="Off-season starts" onchange="setOffSeason()">${monthOpts(OS.from, 'Off')}</select><span>through</span>
+       <select id="ost" class="rfilt" aria-label="Off-season ends" onchange="setOffSeason()"${OS.from ? '' : ' disabled'}>${monthOpts(OS.to || 3)}</select>`)}
 
     <div class="pgroup">Due date colors</div>
     ${row('Card warning colors', 'Cards that are due today or overdue are always red.',
@@ -1602,6 +1621,20 @@ async function clearHistory() {
     ? { title: 'History cleared', message: `${body.deleted} completed task${body.deleted == 1 ? '' : 's'} removed.`, ok: 'OK', info: true, icon: '✅' }
     : { title: 'Couldn’t clear history', message: 'Nothing was deleted. Please try again.', ok: 'OK', info: true });
   load();
+}
+
+// Outdoor off-season (the server moves the tasks: defer_off_season in views.py)
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthOpts = (v, off) => (off ? `<option value="0">${off}</option>` : '') +
+  MONTHS.map((m, i) => `<option value="${i + 1}"${v == i + 1 ? ' selected' : ''}>${m}</option>`).join('');
+async function setOffSeason() {
+  const from = +$('osf').value, to = +$('ost').value;
+  if (from && to % 12 + 1 == from) { await ask({ title: 'That’s the whole year', message: 'Leave at least one month for outdoor tasks.', ok: 'OK', info: true }); draw(); return; }
+  if (from && !ST.offSeason && !await ask({ title: 'Move outdoor tasks?', message: `ToDo tasks in Yard & exterior due ${MONTHS[from - 1]} through ${MONTHS[to - 1]} will move to the 1st of ${MONTHS[to % 12]}. Label a task “Year-round” first to keep its date.`, ok: 'Move them', icon: '🍂' })) { draw(); return; }
+  if (from) ST.offSeason = { from, to }; else delete ST.offSeason;
+  await saveST();
+  load();
+  draw();
 }
 
 // Number settings: clamp, keep orange <= yellow, save, then reload (the server uses spawnDays)
@@ -1894,7 +1927,7 @@ function renderDP(focusIso) {
   $('dp').innerHTML = h;
 }
 
-/* ---- quick entry: new tasks/projects start from the choices of the last one you created (for as long
+/* ---- quick entry: new tasks/projects start from the URL (urlChoices), then the choices of the last one you created (for as long
    as this browser tab is open), "Save & add another" keeps the form open, and after that Tab on the
    title jumps straight to that button: type, Tab, Enter, repeat. ---- */
 let QUICK = false;              // true after "Save & add another" until the form closes
@@ -1928,6 +1961,19 @@ function rememberChoices(kind, v) {
   try { sessionStorage.setItem('last-' + kind, JSON.stringify(v)); } catch (e) { /* private browsing */ }
 }
 
+// What the URL says a new task should be: the same ?room= ?project= ?label= ?status= that filter the Board.
+// These win over the last task's choices; anything unknown (or not in the URL) is left out.
+function urlChoices() {
+  const c = {};
+  if (roomQ()) c.room = roomQ();
+  const project = allProjectNames().find(p => p.toLowerCase() === PROJECT_PARAM);
+  if (project) c.project = project;
+  const label = allLabels().find(g => g.toLowerCase() === LABEL_PARAM);
+  if (label) c.label = label;
+  if (STATUS_Q) c.status = STATUS_Q;
+  return c;
+}
+
 // A colour for a new project: a random palette colour no project uses yet, else any random colour
 function randomProjColor() {
   const used = new Set(Object.values(ST.pcolors || {}).map(c => c.toLowerCase()));
@@ -1945,13 +1991,17 @@ function edit(id, proj) {
   ADDED = 0;
   SAVE_KEY = newSaveKey();
   $('qa-msg').hidden = true;
-  // a new task starts from the last one created (title, link and notes always start empty)
+  // a new task starts from the URL, then the last one created, then the defaults (title, link and notes always start empty)
+  const url = urlChoices();
   const last = lastChoices('task') || {};
   const lastProject = allProjectNames().includes(last.project) ? last.project : '';
+  const pick = proj || url.project;
+  const lastTags = last.tags ? last.tags.split(',') : [];
   const t = T.find(x => x.id == id) || {
-    project: proj || lastProject || '', title: '', status: last.status || 'backlog', tags: last.tags || '',
+    project: pick || lastProject || '', title: '', status: url.status || last.status || 'backlog',
+    tags: (!url.label ? lastTags : isFreq(url.label) ? withFreq(lastTags, url.label) : [...new Set([...lastTags, url.label])]).join(','),
     due: last.due || today(), interval: last.interval || 0, interval_unit: last.interval_unit || 'm', url: '', notes: '', priority: last.priority || 3,
-    room: proj && proj !== last.project ? '' : (last.room || '')
+    room: url.room || (pick && pick !== last.project ? '' : (last.room || ''))
   };
 
   // task form: project is picked from existing projects
@@ -1974,15 +2024,15 @@ function edit(id, proj) {
   SEL = new Set(lbls(t));
   lbl();
 
-  // project form: last project's priority and room, a fresh random colour
+  // project form: the URL's room, else the last project's; its priority, a fresh random colour
   const lp = lastChoices('project') || {};
   $('pn').value = '';
   $('pp').value = lp.priority || 3;
   $('pc').value = randomProjColor();
   const pr = $('pr');
-  pr.innerHTML = roomOpts(isRoom(lp.room) ? lp.room : 'house');
+  pr.innerHTML = roomOpts(url.room || (isRoom(lp.room) ? lp.room : 'house'));
   delete pr.dataset.touched;
-  if (lp.room) pr.dataset.touched = '1';           // keep the remembered room instead of guessing from the name
+  if (url.room || lp.room) pr.dataset.touched = '1';           // keep the remembered room instead of guessing from the name
   pr.onchange = () => { pr.dataset.touched = '1'; };
   $('pn').oninput = () => { if (!pr.dataset.touched) pr.value = guessRoom($('pn').value); };
 
@@ -2123,11 +2173,14 @@ async function svTask(another) {
   if (!cur) setPjOpen(t.project, true);   // the new card is on show, even in a collapsed project
   if (!cur) rememberChoices('task', { project: t.project, room: t.room, priority: t.priority, status: t.status,
                                       tags: t.tags, due: t.due, interval: t.interval, interval_unit: t.interval_unit });
+  const saved = await res.json();
   load();
   if (another && !cur) readyForNext(t.title);
   else $('d').close();
-  if (windowed() && !upcoming(t))
-    ask({ title: 'Saved for later', message: `It's due ${fmtDate(t.due)}, so it shows on the ${V == 'home' ? 'Home map' : 'Board'} from ${showDays() ? `${showDays()} days before then` : 'that day'}. Until then it's on the Calendar and in Settings › Tasks.`, ok: 'OK', info: true, icon: '📅' });
+  if (saved.due && saved.due != t.due)
+    ask({ title: 'Moved past the off-season', message: `Outdoor tasks rest until ${fmtDate(saved.due)}, so that's its new due date. Label it “Year-round” to choose any date.`, ok: 'OK', info: true, icon: '🍂' });
+  else if (windowed() && !upcoming(t))
+    ask({ title: 'Saved for later', message: `It's due ${fmtDate(t.due)}, so it shows on the ${V == 'home' ? 'Home map' : 'Board'} from ${showFor(t) ? `${showFor(t)} days before then` : 'that day'}. Until then it's on the Calendar and in Settings › Tasks.`, ok: 'OK', info: true, icon: '📅' });
 }
 
 async function svProject(another) {

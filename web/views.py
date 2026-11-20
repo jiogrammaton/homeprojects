@@ -24,8 +24,8 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 
 from .models import KeyValueStore, Task
 from .ranking import ranking as rank_all
-from .repeat import UNITS, add_interval, freq_label, parse_freq
-from .rooms import DEFAULT_MAP, all_rooms, match_room
+from .repeat import UNITS, add_interval, freq_label, in_season, off_season, parse_freq
+from .rooms import DEFAULT_MAP, all_rooms, canonical_room, match_room, room_for_project, yard_areas
 from .security import client_ip, who
 
 audit = logging.getLogger('web.audit')
@@ -232,10 +232,11 @@ def save_task(request, task_id=None):
             if seen:
                 return JsonResponse({"status": "ok", "repeat": True})
             return duplicate_response(f['project'], f['title'])
-        Task.objects.create(**f, done_at=date.today() if f['status'] == 'done' else None)
+        t = Task.objects.create(**f, done_at=date.today() if f['status'] == 'done' else None)
 
     spawn_recurring()
-    return JsonResponse({"status": "ok"})
+    t.refresh_from_db(fields=['due'])  # the off-season may have moved it; the form says so
+    return JsonResponse({"status": "ok", "due": _iso(t.due)})
 
 
 @require_http_methods(['DELETE'])
@@ -681,12 +682,16 @@ def import_csv(request):
 # The next due date counts from the day it was completed, not from its old due date.
 
 
+YEAR_ROUND = 'year-round'  # a task with this label ignores the off-season
+
+
 def next_due(t):
     return add_interval(t.done_at, t.interval, t.interval_unit)
 
 
 def remove_successor(t):
     """Delete the occurrence spawned from t if it hasn't been touched yet. True if one was removed."""
+    due, season = next_due(t), off_season(stored_settings())
     succ = (
         Task.objects.filter(
             project=t.project,
@@ -694,7 +699,7 @@ def remove_successor(t):
             interval=t.interval,
             interval_unit=t.interval_unit,
             status='backlog',
-            due=next_due(t),
+            due__in=(due, in_season(due, season) if season else due),  # the off-season may have moved it
             done_at__isnull=True,
         )
         .exclude(pk=t.pk)
@@ -740,3 +745,22 @@ def spawn_recurring():
                 )
             t.spawned = 1
             t.save(update_fields=['spawned'])
+    defer_off_season()
+
+
+def defer_off_season():
+    """Move ToDo tasks in the yard that are due in the off-season to the day it ends, unless labeled Year-round."""
+    settings = stored_settings()
+    season = off_season(settings)
+    if not season:
+        return
+    rooms, areas = all_rooms(settings), yard_areas(settings)
+    ids = {rid for rid, _, _ in rooms}
+    for t in Task.objects.filter(status='backlog', due__isnull=False):
+        due = in_season(t.due, season)
+        if due == t.due or YEAR_ROUND in [g.strip().lower() for g in t.tags.split(',')]:
+            continue
+        room = canonical_room(t.room, areas)
+        if (room if room in ids else room_for_project(t.project, settings, rooms)) == 'yard':
+            t.due = due
+            t.save(update_fields=['due'])

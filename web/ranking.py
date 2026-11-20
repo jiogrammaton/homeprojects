@@ -44,6 +44,16 @@ def show_days(settings):
         return 7
 
 
+def shows_days(interval, unit, settings):
+    """Days ahead a task shows (app.js showFor): tasks repeating more often than monthly use the shorter window."""
+    if interval > 0 and interval * {'d': 1, 'w': 7}.get(unit, 28) < 28:  # under 4 weeks; a month counts as 4+
+        try:
+            return min(365, max(0, int(settings.get('showDaysShort', 3))))
+        except (TypeError, ValueError):
+            return 3
+    return show_days(settings)
+
+
 def _ranked(counts, n_key='todo'):
     return {**counts, **tier(counts[n_key])}
 
@@ -61,9 +71,12 @@ def ranking(settings):
     blank = lambda: {'todo': 0, 'doing': 0, 'overdue': 0}
     by_room = {rid: blank() for rid in ids}
     by_project, proj_room, today = {}, {}, date.today()
-    horizon = today + timedelta(days=show_days(settings))
-    open_tasks = Task.objects.exclude(status='done').exclude(status='backlog', due__gt=horizon)
-    for t in open_tasks.values('project', 'status', 'due', 'room'):
+    for t in Task.objects.exclude(status='done').values(
+        'project', 'status', 'due', 'room', 'interval', 'interval_unit'
+    ):
+        days = shows_days(t['interval'], t['interval_unit'], settings)
+        if t['status'] == 'backlog' and t['due'] and t['due'] > today + timedelta(days=days):
+            continue
         p = t['project']
         if p not in proj_room:
             proj_room[p] = room_for_project(p, settings, rooms)

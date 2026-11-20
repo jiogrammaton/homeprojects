@@ -26,6 +26,91 @@ class AuthedTestCase(TestCase):
         self.client.force_login(self.user)
 
 
+class OffSeasonTests(AuthedTestCase):
+    def setUp(self):
+        super().setUp()
+        KeyValueStore.objects.create(k='settings', v=json.dumps({'offSeason': {'from': 10, 'to': 3}}))
+
+    def run_rule(self):
+        self.client.get('/api/tasks')
+
+    def test_in_season(self):
+        from .repeat import in_season, off_season
+
+        s = off_season({'offSeason': {'from': 10, 'to': 3}})
+        self.assertEqual(in_season(date(2026, 10, 1), s), date(2027, 4, 1))
+        self.assertEqual(in_season(date(2026, 12, 31), s), date(2027, 4, 1))
+        self.assertEqual(in_season(date(2027, 3, 31), s), date(2027, 4, 1))
+        self.assertEqual(in_season(date(2027, 4, 1), s), date(2027, 4, 1))
+        self.assertEqual(in_season(date(2026, 9, 30), s), date(2026, 9, 30))
+        self.assertEqual(in_season(date(2026, 7, 4), (6, 8)), date(2026, 9, 1))  # a season inside one year
+        self.assertEqual(off_season({}), None)
+        self.assertEqual(off_season({'offSeason': {'from': 4, 'to': 3}}), None)  # the whole year
+
+    def test_outdoor_todo_tasks_move(self):
+        d = date(2026, 11, 2)
+        by_room = Task.objects.create(project='Chores', title='mow', due=d, room='yard')
+        by_area = Task.objects.create(project='Chores', title='rake', due=d, room='backyard')
+        by_project = Task.objects.create(project='Exterior', title='fence', due=d)
+        self.run_rule()
+        for t in (by_room, by_area, by_project):
+            t.refresh_from_db()
+            self.assertEqual(t.due, date(2027, 4, 1))
+
+    def test_others_stay(self):
+        d = date(2026, 11, 2)
+        tasks = [
+            Task.objects.create(project='Chores', title='indoors', due=d, room='kitchen'),
+            Task.objects.create(project='Chores', title='started', due=d, room='yard', status='doing'),
+            Task.objects.create(project='Plumbing', title='faucets', due=d, room='yard', tags='Quarterly, Year-Round'),
+            Task.objects.create(project='Chores', title='summer', due=date(2027, 6, 1), room='yard'),
+        ]
+        self.run_rule()
+        for t in tasks:
+            before = t.due
+            t.refresh_from_db()
+            self.assertEqual(t.due, before)
+
+    def test_off_by_default(self):
+        KeyValueStore.objects.all().delete()
+        t = Task.objects.create(project='Chores', title='mow', due=date(2026, 11, 2), room='yard')
+        self.run_rule()
+        t.refresh_from_db()
+        self.assertEqual(t.due, date(2026, 11, 2))
+
+    def test_saving_reports_the_moved_date(self):
+        body = {'project': 'Chores', 'title': 'mow', 'status': 'backlog', 'due': '2026-11-02', 'room': 'yard'}
+        r = self.client.post('/api/tasks/new', json.dumps(body), content_type='application/json')
+        self.assertEqual(r.json()['due'], '2027-04-01')
+
+    def test_reopening_removes_the_moved_copy(self):
+        done = date(2026, 10, 1)
+        t = Task.objects.create(
+            project='Chores',
+            title='mow',
+            due=done,
+            room='yard',
+            status='done',
+            done_at=done,
+            interval=2,
+            interval_unit='w',
+        )
+        self.run_rule()
+        copy = Task.objects.get(status='backlog')
+        self.assertEqual(copy.due, date(2027, 4, 1))
+        body = {
+            'project': 'Chores',
+            'title': 'mow',
+            'status': 'backlog',
+            'due': '2027-06-01',
+            'room': 'yard',
+            'interval': 2,
+            'interval_unit': 'w',
+        }
+        self.client.put(f'/api/tasks/{t.pk}', json.dumps(body), content_type='application/json')
+        self.assertEqual(Task.objects.filter(title='mow').count(), 1)
+
+
 class RecurringTests(AuthedTestCase):
     def setUp(self):
         super().setUp()
@@ -723,6 +808,23 @@ class RankingTests(AuthedTestCase):
         KeyValueStore.objects.create(k='settings', v=json.dumps({'showDays': 30}))
         self.assertEqual(kitchen()['todo'], 2)
         self.assertEqual(Task.objects.count(), 4)  # nothing hidden is touched
+
+    def test_frequent_repeats_show_later(self):
+        # repeats under a month wait for showDaysShort (3); monthly and longer, and one-offs, use showDays (7)
+        due = date.today() + timedelta(days=5)
+        Task.objects.create(project='Kitchen', title='one-off', due=due)
+        Task.objects.create(project='Kitchen', title='monthly', due=due, interval=1, interval_unit='m')
+        Task.objects.create(project='Kitchen', title='4 weeks', due=due, interval=4, interval_unit='w')
+        Task.objects.create(project='Kitchen', title='weekly', due=due, interval=1, interval_unit='w')
+        Task.objects.create(project='Kitchen', title='biweekly', due=due, interval=2, interval_unit='w')
+        Task.objects.create(project='Kitchen', title='daily', due=due, interval=1, interval_unit='d')
+        Task.objects.create(
+            project='Kitchen', title='weekly soon', due=date.today() + timedelta(days=3), interval=1, interval_unit='w'
+        )
+        kitchen = lambda: next(x for x in self.client.get('/api/ranking').json()['rooms'] if x['id'] == 'kitchen')
+        self.assertEqual(kitchen()['todo'], 4)
+        KeyValueStore.objects.create(k='settings', v=json.dumps({'showDaysShort': 5}))
+        self.assertEqual(kitchen()['todo'], 7)
 
     def test_doors_are_not_rooms(self):
         from .rooms import all_rooms, match_room

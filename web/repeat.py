@@ -3,6 +3,7 @@ sets how often it repeats, stored on the task as `interval` + `interval_unit` ('
 parse_freq() mirrors parseFreq() in app.js. The strip helpers are only used by migration 0003 (history)."""
 
 import re
+from datetime import date
 
 from dateutil.relativedelta import relativedelta
 
@@ -73,6 +74,26 @@ def freq_label(n, unit='m'):
 
 def add_interval(d, n, unit='m'):
     return d + relativedelta(**{UNIT_KW.get(unit, 'months'): n})
+
+
+def off_season(settings):
+    """The months outdoor tasks rest, (first, last) as 1-12 (settings `offSeason`), or None if the setting is off."""
+    s = settings.get('offSeason')
+    try:
+        first, last = int(s['from']), int(s['to'])
+    except (TypeError, KeyError, ValueError):
+        return None
+    return (first, last) if 1 <= first <= 12 and 1 <= last <= 12 and last % 12 + 1 != first else None
+
+
+def in_season(d, season):
+    """d, or if it falls in `season` (first, last), the 1st of the month after the season ends."""
+    first, last = season
+    rests = first <= d.month <= last if first <= last else d.month >= first or d.month <= last
+    if not rests:
+        return d
+    start = date(d.year, last % 12 + 1, 1)
+    return start if start > d else start + relativedelta(years=1)
 
 
 # ---- history: migration 0003 removed frequency labels (undone by 0004) ----
